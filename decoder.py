@@ -5,6 +5,7 @@ QueQiao (鹊桥) - Decoder
 
 用法:
     python decoder.py photo1.jpg photo2.jpg -o restored.out
+    python decoder.py photos_dir -o restored.out --backend pyzbar
 """
 
 import os
@@ -15,17 +16,121 @@ import lzma
 import argparse
 import base64
 from pathlib import Path
+from abc import ABC, abstractmethod
 
-import cv2
-import numpy as np
+from PIL import Image
 
 
 # ──────────────────────────────────────────────────────────────
-# 1. 从图片中检测和解码二维码 (使用 OpenCV)
+# 1. 从图片中检测和解码二维码 (adapter implementations)
 # ──────────────────────────────────────────────────────────────
+
+IMAGE_EXTENSIONS = {
+    '.bmp', '.gif', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp'
+}
+
+
+class QRDecodeResult:
+    """A decoded QR payload with optional positional metadata."""
+
+    def __init__(self, data, x=0, y=0, w=0, h=0):
+        self.data = data
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+    def as_position_dict(self):
+        return {
+            'data': self.data,
+            'x': self.x,
+            'y': self.y,
+            'w': self.w,
+            'h': self.h,
+        }
+
+
+class QRDecoderAdapter(ABC):
+    """Adapter interface for QR detection backends."""
+
+    name = None
+
+    @abstractmethod
+    def decode_image(self, image_path):
+        """Return a list of QRDecodeResult objects decoded from image_path."""
+
+
+class PyzbarQRDecoder(QRDecoderAdapter):
+    name = 'pyzbar'
+
+    def __init__(self):
+        try:
+            from pyzbar.pyzbar import decode as pyzbar_decode, ZBarSymbol
+        except ImportError as e:
+            raise RuntimeError(
+                "pyzbar backend is unavailable. Install Python package pyzbar "
+                "and the native zbar library (macOS: brew install zbar; "
+                "Linux: install libzbar0/zbar; Windows: install zbar/VC runtime)."
+            ) from e
+
+        self.pyzbar_decode = pyzbar_decode
+        self.qrcode_symbol = ZBarSymbol.QRCODE
+
+    def decode_image(self, image_path):
+        try:
+            img = Image.open(image_path)
+        except Exception as e:
+            raise ValueError(f"Cannot read image: {image_path}") from e
+
+        results = []
+        for mode in [None, 'L', '1']:
+            try:
+                test_img = img if mode is None else img.convert(mode)
+                results.extend(
+                    self.pyzbar_decode(test_img, symbols=[self.qrcode_symbol])
+                )
+            except Exception:
+                pass
+
+        seen = set()
+        unique = []
+        for item in results:
+            data_hash = hashlib.md5(item.data).hexdigest()
+            if data_hash in seen:
+                continue
+            seen.add(data_hash)
+
+            x, y, w, h = 0, 0, 0, 0
+            rect = getattr(item, 'rect', None)
+            if rect is not None:
+                x = getattr(rect, 'left', 0)
+                y = getattr(rect, 'top', 0)
+                w = getattr(rect, 'width', 0)
+                h = getattr(rect, 'height', 0)
+
+            unique.append(QRDecodeResult(item.data, x, y, w, h))
+
+        return unique
+
+
+class OpenCVQRDecoder(QRDecoderAdapter):
+    name = 'opencv'
+
+    def __init__(self):
+        try:
+            import cv2
+        except ImportError as e:
+            raise RuntimeError(
+                "opencv backend is unavailable. Install opencv-python-headless: "
+                "pip install opencv-python-headless"
+            ) from e
+
+    def decode_image(self, image_path):
+        return [QRDecodeResult(**qr) for qr in decode_qr_from_image_opencv(image_path)]
 
 def preprocess_image(img):
     """预处理图片，提高二维码检测率"""
+    import cv2
     if len(img.shape) == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
@@ -68,11 +173,12 @@ def preprocess_image(img):
     return results
 
 
-def decode_qr_from_image(image_path):
+def decode_qr_from_image_opencv(image_path):
     """
     从图片中检测并解码所有二维码
     返回: [{'data': bytes, 'x': int, 'y': int, 'w': int, 'h': int}, ...]
     """
+    import cv2
     img = cv2.imread(image_path)
     if img is None:
         raise ValueError(f"Cannot read image: {image_path}")
@@ -151,6 +257,32 @@ def decode_qr_from_image(image_path):
             pass
     
     return all_results
+
+
+def get_decoder_adapter(name):
+    adapters = {
+        PyzbarQRDecoder.name: PyzbarQRDecoder,
+        OpenCVQRDecoder.name: OpenCVQRDecoder,
+    }
+    return adapters[name]()
+
+
+def expand_image_inputs(inputs):
+    """Expand file/dir CLI inputs into a sorted list of image files."""
+    image_files = []
+
+    for item in inputs:
+        path = Path(item)
+        if path.is_dir():
+            matches = [
+                child for child in path.iterdir()
+                if child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS
+            ]
+            image_files.extend(sorted(matches))
+        else:
+            image_files.append(path)
+
+    return [str(path) for path in image_files]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -339,13 +471,21 @@ def main():
   # 从多张照片解码（二维码分布在多页时）
   python decoder.py page1.jpg page2.jpg page3.jpg -o restored.out
 
+  # 从目录中的图片解码（默认使用 pyzbar）
+  python decoder.py photos_dir -o restored.out
+
+  # 强制使用 OpenCV 后端
+  python decoder.py photos_dir -o restored.out --backend opencv
+
   # 如果还原出来的是一个 patch，可应用:
   patch -p1 < restored.out
 """
     )
-    parser.add_argument('images', nargs='+', help='包含二维码的照片文件')
+    parser.add_argument('images', nargs='+', help='包含二维码的照片文件或目录')
     parser.add_argument('-o', '--output', default='restored.out',
                         help='输出文件 (默认: restored.out)')
+    parser.add_argument('--backend', choices=['pyzbar', 'opencv'], default='pyzbar',
+                        help='二维码识别后端 (默认: pyzbar)')
     parser.add_argument('--debug', action='store_true', help='显示调试信息')
     
     args = parser.parse_args()
@@ -353,13 +493,29 @@ def main():
     print("=" * 60)
     print("  QueQiao (鹊桥) - Decoder")
     print("=" * 60)
+    print(f"  Backend: {args.backend}")
     print()
+
+    try:
+        adapter = get_decoder_adapter(args.backend)
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        print()
+        print("可选方案:")
+        print("  - 安装 zbar 后重试 pyzbar")
+        print("  - 或临时使用: --backend opencv")
+        sys.exit(1)
+
+    image_paths = expand_image_inputs(args.images)
+    if not image_paths:
+        print("❌ No image files found in the provided inputs")
+        sys.exit(1)
     
     # Step 1: 从所有图片中提取二维码
     all_qr_data = []
     total_found = 0
     
-    for img_path in args.images:
+    for img_path in image_paths:
         print(f"[📷] Processing: {img_path}")
         
         if not os.path.exists(img_path):
@@ -367,7 +523,8 @@ def main():
             continue
         
         try:
-            qr_list = decode_qr_from_image(img_path)
+            qr_results = adapter.decode_image(img_path)
+            qr_list = [result.as_position_dict() for result in qr_results]
             print(f"  Found {len(qr_list)} QR codes")
             
             sorted_qr = sort_qr_by_position(qr_list)

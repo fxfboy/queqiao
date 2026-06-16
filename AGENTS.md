@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -23,7 +23,7 @@ Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows 
 Direct invocation (after `source .venv/bin/activate`):
 
 ```bash
-python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N]
+python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
 python decoder.py <images-or-dirs...> -o out [--backend pyzbar|opencv] [--debug]
 python decode_pyzbar.py [image_dir=bid] [out=restored.out] # legacy pyzbar path, scans PNGs in a DIR
 python make_diff.py <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
