@@ -13,6 +13,7 @@ import sys
 import hashlib
 import struct
 import lzma
+import json
 import argparse
 import base64
 from pathlib import Path
@@ -397,45 +398,55 @@ def decode_single_chunk(b85_data):
 def decode_and_merge_chunks(qr_data_list):
     """
     解码所有分片，合并数据
-    
-    返回: (merged_data, stats)
+
+    Index 0 = 元数据 (JSON), Index 1..N = 数据分片
+    返回: (merged_data, stats, metadata)
     """
     chunks = {}
     total = None
     invalid_count = 0
-    
+
     for b85_data in qr_data_list:
         result = decode_single_chunk(b85_data)
-        
+
         if result is None:
             invalid_count += 1
             continue
-        
+
         idx, t, data = result
-        
+
         if total is None:
             total = t
         elif t != total:
             print(f"  ⚠️  Inconsistent total count: expected {total}, got {t}")
             continue
-        
+
         if idx in chunks:
             if chunks[idx] == data:
                 continue
             else:
                 print(f"  ⚠️  Conflicting data for chunk {idx}, using first occurrence")
                 continue
-        
+
         chunks[idx] = data
-    
+
     if total is None:
         raise ValueError("No valid chunks found in any image")
-    
+
+    metadata = None
+    if 0 in chunks:
+        try:
+            metadata = json.loads(chunks[0].decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            print("  ⚠️  Metadata chunk (index 0) is malformed, ignoring")
+    else:
+        print("  ⚠️  Metadata chunk (index 0) missing; no file integrity check available")
+
     missing = []
-    for i in range(total):
+    for i in range(1, total):
         if i not in chunks:
             missing.append(i)
-    
+
     stats = {
         'total': total,
         'decoded': len(chunks),
@@ -443,16 +454,16 @@ def decode_and_merge_chunks(qr_data_list):
         'invalid': invalid_count,
         'duplicate': len(qr_data_list) - len(chunks) - invalid_count,
     }
-    
+
     if missing:
-        print(f"\n  ❌ Missing {len(missing)} chunks: {missing[:20]}{'...' if len(missing) > 20 else ''}")
-        raise ValueError(f"Cannot restore: {len(missing)} chunks missing")
-    
+        print(f"\n  ❌ Missing {len(missing)} data chunks: {missing[:20]}{'...' if len(missing) > 20 else ''}")
+        raise ValueError(f"Cannot restore: {len(missing)} data chunks missing")
+
     result = b''
-    for i in range(total):
+    for i in range(1, total):
         result += chunks[i]
-    
-    return result, stats
+
+    return result, stats, metadata
 
 
 # ──────────────────────────────────────────────────────────────
@@ -560,19 +571,23 @@ def main():
     
     # Step 2: 解码合并
     print("[🔧] Decoding and verifying chunks...")
-    
+
     try:
-        compressed_data, stats = decode_and_merge_chunks(all_qr_data)
+        compressed_data, stats, metadata = decode_and_merge_chunks(all_qr_data)
     except ValueError as e:
         print(f"\n❌ Failed: {e}")
         sys.exit(1)
-    
+
     print(f"  ✅ All {stats['total']} chunks verified")
     print(f"     Decoded:   {stats['decoded']}")
     print(f"     Invalid:   {stats['invalid']}")
     print(f"     Duplicate: {stats['duplicate']}")
+    if metadata:
+        print(f"     Metadata:  version={metadata.get('version')}, "
+              f"filename={metadata.get('filename', '?')}, "
+              f"size={metadata.get('size', '?')}")
     print()
-    
+
     # Step 3: 解压
     print("[📦] Decompressing...")
 
@@ -585,7 +600,27 @@ def main():
         print(f"  ❌ Decompression failed: {e}")
         sys.exit(1)
 
-    # Step 4: 保存（按字节写出，与输入逐字节一致）
+    # Step 3.5: 验证整文件 SHA256
+    if metadata and 'sha256' in metadata:
+        actual_sha256 = hashlib.sha256(output_data).hexdigest()
+        expected_sha256 = metadata['sha256']
+        if actual_sha256 != expected_sha256:
+            print(f"\n  ❌ SHA256 MISMATCH")
+            print(f"  Expected: {expected_sha256}")
+            print(f"  Actual:   {actual_sha256}")
+            print(f"  The restored file may be corrupted!")
+            sys.exit(1)
+        else:
+            print(f"  ✅ SHA256 verified: {actual_sha256[:16]}...")
+
+    # Step 4: 确定输出文件名
+    if args.output == 'restored.out' and metadata and metadata.get('filename'):
+        name = metadata['filename'].replace('/', '').replace('\\', '').strip()
+        if name and name not in ('.', '..'):
+            args.output = name
+            print(f"  📁 Using filename from metadata: {args.output}")
+
+    # Step 5: 保存（按字节写出，与输入逐字节一致）
     with open(args.output, 'wb') as f:
         f.write(output_data)
     

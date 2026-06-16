@@ -26,7 +26,7 @@ def build_sample():
 def verify_full_roundtrip():
     sample = build_sample()
     print(f"[1/4] Encoding {len(sample):,} bytes...")
-    chunks, original_size, compressed_size = encode_chunks(sample, chunk_size=400)
+    chunks, original_size, compressed_size = encode_chunks(sample, chunk_size=400, filename="verify_sample.bin")
     print(f"  {len(chunks)} chunks, {compressed_size:,} compressed bytes")
 
     print("[2/4] Rendering QR PNGs...")
@@ -62,11 +62,11 @@ def verify_full_roundtrip():
             decoded[idx] = data
 
         print(f"[4/4] Merging ({len(decoded)}/{total}, failed={failed})...")
-        missing = [i for i in range(total) if i not in decoded]
+        missing = [i for i in range(1, total) if i not in decoded]
         if missing:
             print(f"  ❌ Missing {len(missing)} chunks: {missing[:10]}")
             return False
-        merged = b''.join(decoded[i] for i in range(total))
+        merged = b''.join(decoded[i] for i in range(1, total))
         restored = lzma.decompress(merged)
         if restored == sample:
             print("  ✅ VERIFICATION PASSED (byte-identical)")

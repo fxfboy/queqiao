@@ -19,7 +19,7 @@ SAMPLE = b"QR roundtrip sample\n" + bytes(range(256)) * 4
 
 def test_full_roundtrip_with_qr():
     print("[1/4] Encoding sample bytes...")
-    chunks, original_size, compressed_size = encode_chunks(SAMPLE, chunk_size=400)
+    chunks, original_size, compressed_size = encode_chunks(SAMPLE, chunk_size=400, filename="roundtrip.bin")
     print(f"  {len(chunks)} chunks, {compressed_size} compressed bytes")
 
     print("[2/4] Rendering QR PNGs...")
@@ -49,7 +49,7 @@ def test_full_roundtrip_with_qr():
 
         print("[4/4] Merging and verifying bytes...")
         assert len(decoded) == total, f"missing chunks: {len(decoded)}/{total}"
-        merged = b''.join(decoded[i] for i in range(total))
+        merged = b''.join(decoded[i] for i in range(1, total))
         restored = lzma.decompress(merged)
         assert restored == SAMPLE, "restored bytes must match input exactly"
         print("  ✅ Full roundtrip PASSED")

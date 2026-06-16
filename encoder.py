@@ -12,6 +12,7 @@ import hashlib
 import struct
 import argparse
 import lzma
+import json
 import webbrowser
 import base64
 import math
@@ -26,40 +27,52 @@ import qrcode
 # 2. 数据编码：压缩 + 分片 + 校验
 # ──────────────────────────────────────────────────────────────
 
-def encode_chunks(data, chunk_size=400):
+def encode_chunks(data, chunk_size=400, filename=None):
     """
     将数据编码为多个分片
-    
-    分片格式:
+
+    分片格式 (每片共用):
     - magic:    2 bytes  (0x51 0x52 = "QR")
-    - index:    2 bytes  (分片序号，从 0 开始)
-    - total:    2 bytes  (总分片数)
+    - index:    2 bytes  (分片序号; 0 = 元数据, 1..N = 数据)
+    - total:    2 bytes  (总分片数, 含元数据)
     - datalen:  2 bytes  (本片数据长度)
     - checksum: 4 bytes  (SHA256 的前 4 字节)
     - data:     N bytes  (实际数据)
-    
+
     头部总长: 12 bytes
+
+    Index 0 (元数据片) 的 data 是 JSON:
+    {"version":1,"filename":"...","size":N,"sha256":"...","compressed_size":N}
     """
     MAGIC = b'QR'
-    HEADER_SIZE = 12  # 2+2+2+2+4
-    
-    # 压缩（lzma/xz，比 gzip 对文本压缩率更高，约多省 24%）
+
+    file_sha256 = hashlib.sha256(data).hexdigest()
+
     compressed = lzma.compress(data, preset=9 | lzma.PRESET_EXTREME)
-    
-    # 分片
+
     raw_chunks = []
     for i in range(0, len(compressed), chunk_size):
         raw_chunks.append(compressed[i:i+chunk_size])
-    
-    total = len(raw_chunks)
-    encoded = []
-    
+
+    total = len(raw_chunks) + 1  # +1 for metadata chunk
+
+    meta = {
+        "version": 1,
+        "filename": filename or "",
+        "size": len(data),
+        "sha256": file_sha256,
+        "compressed_size": len(compressed),
+    }
+    meta_bytes = json.dumps(meta, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    meta_checksum = hashlib.sha256(meta_bytes).digest()[:4]
+    meta_header = MAGIC + struct.pack('>HHH', 0, total, len(meta_bytes)) + meta_checksum
+    encoded = [meta_header + meta_bytes]
+
     for idx, chunk in enumerate(raw_chunks):
         checksum = hashlib.sha256(chunk).digest()[:4]
-        header = MAGIC + struct.pack('>HHH', idx, total, len(chunk)) + checksum
-        payload = header + chunk
-        encoded.append(payload)
-    
+        header = MAGIC + struct.pack('>HHH', idx + 1, total, len(chunk)) + checksum
+        encoded.append(header + chunk)
+
     return encoded, len(data), len(compressed)
 
 
@@ -274,7 +287,7 @@ def main():
         sys.exit(1)
 
     print(f"[2/2] Encoding (chunk_size={args.chunk_size})...")
-    chunks, original_size, compressed_size = encode_chunks(data, chunk_size=args.chunk_size)
+    chunks, original_size, compressed_size = encode_chunks(data, chunk_size=args.chunk_size, filename=input_path.name)
     compression_ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
     print(f"  Original:   {original_size:,} bytes")
     print(f"  Compressed: {compressed_size:,} bytes ({compression_ratio:.1f}% saved)")

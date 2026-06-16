@@ -43,10 +43,12 @@ Tests are **plain assert-based scripts, not pytest** — there is no per-test se
 
 ```
 encoder.py:  read_bytes(input file) → lzma(xz, preset 9|EXTREME) → split into chunks
+             → build metadata JSON chunk (index 0) + data chunks (1..N)
              → prepend 12-byte header w/ checksum → base85 → qrcode → HTML grid
 decoder.py:  photo(s)/dir(s) → QR backend (pyzbar default, OpenCV optional)
              → base85 decode → parse header / verify
-             → reassemble by index → lzma decompress → write raw bytes
+             → extract metadata from index 0 → reassemble data chunks (1..N)
+             → lzma decompress → verify whole-file SHA256 → write raw bytes
 ```
 
 base85 is used for the **QR payload** (denser than base64); base64 is used separately only to inline PNGs into the HTML.
@@ -67,6 +69,10 @@ Every chunk is `MAGIC(2) | index(2,>H) | total(2,>H) | datalen(2,>H) | checksum(
 - `test_roundtrip.py`, `test_qr_roundtrip.py`, `verify_full.py` (inline parsers)
 
 **If you change the header layout, magic, checksum, or struct format, you must update all of these in lockstep.** `make_diff.py` does **not** touch the wire format and is not part of this set.
+
+**Chunk index 0 is a metadata chunk** whose payload is compact JSON:
+`{"version":1,"filename":"input.txt","size":12345,"sha256":"abcdef...","compressed_size":5678}`
+Data chunks occupy indices 1..N. The `total` field in every header = N+1 (metadata + data). Decoders extract metadata from index 0, merge only `range(1, total)` for data, then verify the whole-file SHA256 after decompression. If index 0 is missing, decoders warn but proceed without verification.
 
 ### Reassembly is order-independent by design
 

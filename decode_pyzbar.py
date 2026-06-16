@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """QueQiao (鹊桥) pyzbar decoder for better QR detection from screenshots."""
-import os, sys, hashlib, struct, lzma, base64
+import os, sys, hashlib, struct, lzma, json, base64
 from pathlib import Path
 from pyzbar.pyzbar import decode as pyzbar_decode
 from PIL import Image
@@ -97,22 +97,46 @@ if total is None:
     print("❌ No valid chunks found")
     sys.exit(1)
 
-missing = [i for i in range(total) if i not in chunks]
+# Extract metadata from index 0
+metadata = None
+if 0 in chunks:
+    try:
+        metadata = json.loads(chunks[0].decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        print("  ⚠️  Metadata chunk (index 0) is malformed, ignoring")
+else:
+    print("  ⚠️  Metadata chunk (index 0) missing; no file integrity check available")
+
+missing = [i for i in range(1, total) if i not in chunks]
 print(f"\n✅ Decoded: {len(chunks)}/{total} chunks")
 print(f"   Invalid: {invalid_count}")
 if missing:
-    print(f"❌ Missing {len(missing)} chunks: {missing[:20]}{'...' if len(missing)>20 else ''}")
+    print(f"❌ Missing {len(missing)} data chunks: {missing[:20]}{'...' if len(missing)>20 else ''}")
     sys.exit(1)
 
 # Merge and decompress
 result = b''
-for i in range(total):
+for i in range(1, total):
     result += chunks[i]
 
 try:
     output_data = lzma.decompress(result)
 except lzma.LZMAError:
     output_data = result
+
+# Verify SHA256
+if metadata and 'sha256' in metadata:
+    actual = hashlib.sha256(output_data).hexdigest()
+    if actual != metadata['sha256']:
+        print(f"  ❌ SHA256 MISMATCH expected={metadata['sha256'][:16]}... got={actual[:16]}...")
+        sys.exit(1)
+    print(f"  ✅ SHA256 verified: {actual[:16]}...")
+
+# Use metadata filename if no output specified
+if output_file == "restored.out" and metadata and metadata.get('filename'):
+    name = metadata['filename'].replace('/', '').replace('\\', '').strip()
+    if name and name not in ('.', '..'):
+        output_file = name
 
 with open(output_file, 'wb') as f:
     f.write(output_data)

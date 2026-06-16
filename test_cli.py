@@ -4,6 +4,7 @@ import os
 import sys
 import subprocess
 import tempfile
+import shutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -18,7 +19,7 @@ def test_encoder_cli():
     with open(src, 'wb') as f:
         f.write(SAMPLE)
     try:
-        r = subprocess.run([sys.executable, os.path.join(HERE, 'encoder.py'), src, '-o', out],
+        r = subprocess.run([sys.executable, os.path.join(HERE, 'encoder.py'), src, '-o', out, '--no-open'],
                            capture_output=True, text=True)
         assert r.returncode == 0, f"encoder failed: {r.stderr}"
         assert os.path.exists(out), "html output should exist"
@@ -32,30 +33,53 @@ def test_encoder_cli():
 
 
 def test_decoder_cli():
-    print("[TEST] decoder.py CLI (QR image → raw bytes out)...")
+    print("[TEST] decoder.py CLI (QR images → raw bytes out, default backend)...")
     from encoder import encode_chunks, chunk_to_qr_image
     sample = b'\x00\x01\x02\xff\xfe binary+text\n' * 8   # non-utf8 on purpose
     chunks, _, _ = encode_chunks(sample, chunk_size=400)
-    assert len(chunks) == 1, "sample should fit in one chunk (single QR image)"
-    png = tempfile.mktemp(suffix='.png')
+    d = tempfile.mkdtemp()
     out = tempfile.mktemp(suffix='.out')
-    chunk_to_qr_image(chunks[0], box_size=10, border=4).save(png)
     try:
-        r = subprocess.run([sys.executable, os.path.join(HERE, 'decoder.py'), png, '-o', out],
+        for i, payload in enumerate(chunks):
+            chunk_to_qr_image(payload, box_size=10, border=4).save(os.path.join(d, f'{i:03d}.png'))
+        r = subprocess.run([sys.executable, os.path.join(HERE, 'decoder.py'), d, '-o', out],
                            capture_output=True, text=True)
         assert r.returncode == 0, f"decoder failed: {r.stderr}"
         with open(out, 'rb') as f:
             assert f.read() == sample, "decoded bytes must match input exactly"
         print("  ✅ PASSED")
     finally:
-        for p in (png, out):
-            if os.path.exists(p):
-                os.remove(p)
+        shutil.rmtree(d, ignore_errors=True)
+        if os.path.exists(out):
+            os.remove(out)
+
+
+def test_decoder_cli_directory_pyzbar():
+    print("[TEST] decoder.py CLI (dir of PNGs → raw bytes out, pyzbar backend)...")
+    from encoder import encode_chunks, chunk_to_qr_image
+    sample = b'\x00\xff decoder dir bytes\n' * 20
+    chunks, _, _ = encode_chunks(sample, chunk_size=400)
+    d = tempfile.mkdtemp()
+    out = tempfile.mktemp(suffix='.out')
+    try:
+        for i, payload in enumerate(chunks):
+            chunk_to_qr_image(payload, box_size=10, border=4).save(os.path.join(d, f'{i:03d}.png'))
+        r = subprocess.run([
+            sys.executable, os.path.join(HERE, 'decoder.py'), d,
+            '-o', out, '--backend', 'pyzbar',
+        ], capture_output=True, text=True)
+        assert r.returncode == 0, f"decoder dir failed: {r.stderr}"
+        with open(out, 'rb') as f:
+            assert f.read() == sample, "decoded bytes must match input exactly"
+        print("  ✅ PASSED")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        if os.path.exists(out):
+            os.remove(out)
 
 
 def test_decode_pyzbar_cli():
     print("[TEST] decode_pyzbar.py CLI (dir of PNGs → raw bytes out)...")
-    import shutil
     from encoder import encode_chunks, chunk_to_qr_image
     sample = b'\x00\xff pyzbar bytes\n' * 20   # non-utf8 on purpose
     chunks, _, _ = encode_chunks(sample, chunk_size=400)
@@ -79,5 +103,6 @@ def test_decode_pyzbar_cli():
 if __name__ == '__main__':
     test_encoder_cli()
     test_decoder_cli()
+    test_decoder_cli_directory_pyzbar()
     test_decode_pyzbar_cli()
     print("\n✅ test_cli passed!")
