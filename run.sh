@@ -2,7 +2,7 @@
 #
 # QueQiao (鹊桥) - 快速启动脚本
 # 兼容 Linux, macOS, Windows (Git Bash)
-# 用法: ./run.sh encode /path/to/ext-repo /path/to/int-repo [选项]
+# 用法: ./run.sh encode <输入文件> [选项]
 #       ./run.sh decode photo1.jpg [photo2.jpg ...]
 #
 
@@ -48,6 +48,16 @@ get_activate_script() {
 
 ACTIVATE_SCRIPT=$(get_activate_script)
 
+get_venv_python() {
+    if [ "$OS" = "windows" ]; then
+        echo "$VENV_DIR/Scripts/python"
+    else
+        echo "$VENV_DIR/bin/python"
+    fi
+}
+
+VENV_PYTHON=$(get_venv_python)
+
 # 确保虚拟环境存在
 setup_venv() {
     if [ ! -d "$VENV_DIR" ]; then
@@ -64,6 +74,8 @@ setup_venv() {
     else
         source "$ACTIVATE_SCRIPT"
     fi
+
+    PYTHON="$VENV_PYTHON"
 }
 
 # 安装 pyzbar 及其依赖
@@ -127,13 +139,15 @@ main() {
                 echo "用法: ./run.sh encode <输入文件> [选项]"
                 echo ""
                 echo "选项:"
-                echo "  -o FILE              输出 HTML 文件 (默认: qr_diff.html)"
+                echo "  -o FILE              输出 HTML 文件 (默认: output/qr-{chunk_size}-{时间戳}.html)"
                 echo "  --cols N             每行二维码数量 (默认: 6)"
                 echo "  --qr-size N          二维码尺寸 (默认: 180)"
-                echo "  --chunk-size N       每片字节数 (默认: 400)"
+                echo "  --chunk-size N       每片字节数 (默认: 800)"
+                echo "  --no-open            生成后不自动打开浏览器 (默认: 自动打开)"
                 echo ""
                 echo "示例:"
                 echo "  ./run.sh encode input.txt -o qr.html"
+                echo "  ./run.sh encode input.txt -o qr.html --chunk-size 1000 --qr-size 340"
                 echo "  # 传输仓库 diff（先生成再编码）:"
                 echo "  ./run.sh diff /ext/repo /int/repo -o changes.patch"
                 echo "  ./run.sh encode changes.patch -o qr.html"
@@ -163,11 +177,12 @@ main() {
         decode|d)
             shift
             if [ $# -lt 1 ]; then
-                echo "用法: ./run.sh decode <照片1> [照片2 ...] [选项]"
+                echo "用法: ./run.sh decode <照片/目录...> [选项]"
                 echo ""
                 echo "选项:"
-                echo "  -o FILE     输出文件 (默认: restored.out)"
-                echo "  --debug     显示调试信息"
+                echo "  -o FILE              输出文件 (默认: restored.out)"
+                echo "  --backend NAME       识别后端: pyzbar/opencv (默认: pyzbar)"
+                echo "  --debug              显示调试信息"
                 exit 1
             fi
             $PYTHON "$SCRIPT_DIR/decoder.py" "$@"
@@ -187,14 +202,15 @@ main() {
             echo "两个隔离世界，靠屏幕与相机，逐字节完整相会。"
             echo ""
             echo "用法:"
-            echo "  ./run.sh encode <输入文件>             # 把文件编码成二维码 HTML"
-            echo "  ./run.sh decode <照片...>              # 从照片还原文件"
+            echo "  ./run.sh encode <输入文件> [--chunk-size N]  # 把文件编码成二维码 HTML"
+            echo "  ./run.sh decode <照片/目录...>         # 从照片还原文件"
             echo "  ./run.sh diff <基准目录> <目标目录>    # (可选) 生成目录 diff 文件"
             echo "  ./run.sh test                          # 运行测试"
             echo "  ./run.sh verify                        # 验证完整往返"
             echo ""
             echo "完整流程 (传输任意文件):"
             echo "  1. 内网: ./run.sh encode input.txt -o qr.html"
+            echo "     截图传输可用: ./run.sh encode input.txt -o qr.html --chunk-size 1000 --qr-size 340"
             echo "  2. 浏览器打开 qr.html，全屏显示"
             echo "  3. 手机拍照，传到外网"
             echo "  4. 外网: ./run.sh decode photo.jpg -o restored.out"

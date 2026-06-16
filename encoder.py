@@ -12,8 +12,10 @@ import hashlib
 import struct
 import argparse
 import lzma
+import webbrowser
 import base64
 import math
+import time
 from pathlib import Path
 from io import BytesIO
 
@@ -233,16 +235,24 @@ def main():
 """
     )
     parser.add_argument('input', help='要传输的输入文件 (任意文件)')
-    parser.add_argument('-o', '--output', default='qr_diff.html',
-                        help='输出 HTML 文件 (默认: qr_diff.html)')
+    parser.add_argument('-o', '--output', default=None,
+                        help='输出 HTML 文件 (默认: output/qr-{chunk_size}-{timestamp}.html)')
     parser.add_argument('--cols', type=int, default=6,
                         help='每行显示的二维码数量 (默认: 6)')
     parser.add_argument('--qr-size', type=int, default=180,
                         help='二维码图片尺寸/像素 (默认: 180)')
-    parser.add_argument('--chunk-size', type=int, default=400,
-                        help='每个分片的数据字节数 (默认: 400)')
+    parser.add_argument('--chunk-size', type=int, default=800,
+                        help='每个分片的数据字节数 (默认: 800)')
+    parser.add_argument('--no-open', action='store_true',
+                        help='生成后不自动打开浏览器 (默认: 自动打开)')
 
     args = parser.parse_args()
+
+    if args.output is None:
+        timestamp = time.strftime('%Y%m%d-%H%M%S')
+        output_dir = Path(__file__).parent / 'output'
+        output_dir.mkdir(exist_ok=True)
+        args.output = str(output_dir / f'qr-{args.chunk_size}-{timestamp}.html')
 
     input_path = Path(args.input)
     if not input_path.is_file():
@@ -285,6 +295,11 @@ def main():
     print("    3. 用手机/相机水平拍摄整个屏幕")
     print("    4. 确保所有二维码清晰可见")
     print("=" * 60)
+
+    if not args.no_open:
+        file_url = Path(args.output).resolve().as_uri()
+        print(f"\n  🌐 Opening in browser: {file_url}")
+        webbrowser.open(file_url)
 
 
 if __name__ == '__main__':
