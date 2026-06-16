@@ -42,6 +42,8 @@ pip install qrcode[pil] Pillow opencv-python-headless pyzbar
 #   Windows: 安装 Visual C++ Redistributable
 ```
 
+`./run.sh` 会在首次创建虚拟环境时尽力自动安装 zbar（macOS 使用 Homebrew，Linux 使用 apt/yum）。如果系统包管理器不可用或安装失败，请按上面的命令手动安装；也可以临时使用 `--backend opencv`。
+
 ## 使用方法
 
 ### 编码端（内网）—— 文件 → 二维码 HTML
@@ -59,12 +61,14 @@ pip install qrcode[pil] Pillow opencv-python-headless pyzbar
 ./run.sh decode photo.jpg -o restored.out
 # 多张照片:
 ./run.sh decode photo1.jpg photo2.jpg -o restored.out
+# 或直接扫描目录中的图片:
+./run.sh decode photos_dir -o restored.out
 ```
 
-`decoder.py` 使用 OpenCV 检测二维码。如果检测率不理想，可改用 pyzbar（识别更稳）：
+`decoder.py` 默认使用 pyzbar 检测二维码（识别更稳）。如果 zbar 系统库暂时不可用，可切到 OpenCV 后端：
 
 ```bash
-python decode_pyzbar.py <存放截图的目录> restored.out   # 默认目录: bid/
+./run.sh decode photos_dir -o restored.out --backend opencv
 ```
 
 ### 传输方式与 chunk-size 选择
@@ -114,8 +118,9 @@ python make_diff.py /ext /int --ignore "*.log" "tmp"   # 额外忽略模式
 ### decoder.py
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `images` | - | 照片文件（可多个） |
+| `images` | - | 照片文件或目录（可多个） |
 | `-o` | `restored.out` | 输出文件 |
+| `--backend` | `pyzbar` | 识别后端：`pyzbar` 或 `opencv` |
 | `--debug` | - | 显示调试信息 |
 
 ### make_diff.py（可选）
