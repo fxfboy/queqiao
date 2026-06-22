@@ -10,19 +10,22 @@ QueQiao（鹊桥）是在两个物理隔离、没有网络路径的世界之间�
 任意输入文件 (文本或二进制)
         │
         ▼
-    lzma(xz) 压缩 (节省 ~75-85%)
+    lzma(xz) 压缩 (preset 9 + EXTREME)
         │
         ▼
-    分片 + SHA256 校验 (每片 400 bytes)
+    元数据片 (index 0: 文件名/大小/SHA256) + 数据分片 (1..N, 每片默认 800 bytes)
         │
         ▼
-    base85 编码 → 生成 QR 码 → HTML 页面
+    12 字节头部 (magic + index + total + datalen + SHA256[:4])
         │
         ▼
-    📸 全屏显示 → 拍照 → 传到对端
+    base85 编码 → 生成 QR 码 → HTML 页面 (自动打开浏览器)
         │
         ▼
-    从照片解码 QR → 校验 + 合并 + 解压
+    📸 全屏显示 → 拍照/截图 → 传到对端
+        │
+        ▼
+    从照片解码 QR → 校验 + 合并 + 解压 + 整文件 SHA256 验证
         │
         ▼
     逐字节还原出原始文件
@@ -50,10 +53,11 @@ pip install qrcode[pil] Pillow opencv-python-headless pyzbar
 
 ```bash
 ./run.sh encode input.txt -o qr.html
-# 或直接: python encoder.py input.txt -o qr.html
+# 不指定 -o 时自动生成: output/qr-{chunk_size}-{时间戳}.html
+# 生成后自动在浏览器中打开；加 --no-open 可跳过
 ```
 
-在浏览器打开 `qr.html`，按 **F11** 全屏，保持屏幕水平、亮度充足，用手机/相机拍下所有二维码。
+浏览器打开后按 **F11** 全屏，保持屏幕水平、亮度充足，用手机/相机拍下所有二维码（或直接截图）。
 
 ### 解码端（外网）—— 照片 → 文件
 
@@ -63,6 +67,7 @@ pip install qrcode[pil] Pillow opencv-python-headless pyzbar
 ./run.sh decode photo1.jpg photo2.jpg -o restored.out
 # 或直接扫描目录中的图片:
 ./run.sh decode photos_dir -o restored.out
+# 不指定 -o 时，解码器会从元数据中读取原始文件名自动命名
 ```
 
 `decoder.py` 默认使用 pyzbar 检测二维码（识别更稳）。如果 zbar 系统库暂时不可用，可切到 OpenCV 后端：
@@ -77,13 +82,13 @@ pip install qrcode[pil] Pillow opencv-python-headless pyzbar
 
 | 场景 | 推荐参数 | 特点 |
 |------|----------|------|
-| **拍照传输** | `--chunk-size 400`（默认） | 二维码密度低、容错高，扛得住镜头畸变/对焦/反光 |
+| **拍照传输** | `--chunk-size 800`（默认） | 二维码密度适中、容错好，扛得住镜头畸变/对焦/反光 |
 | **截图传输（推荐）** | `--chunk-size 1000~1500 --qr-size 340` | 截图像素级无损，可用更大分片，二维码数量大幅减少 |
 | **截图传输（极限）** | `--chunk-size 1800 --qr-size 380` | 单码顶到 QR 最大规格 version 40，数量最少 |
 
 - `--chunk-size` 上限约为 **1800**：再大单个二维码会超出 QR version 40 的容量，编码器报错。
 - 截图场景务必把 `--qr-size` 调到 ≥ 单码原图尺寸（高密度码原图更大），否则浏览器/截图下采样会让密集模块糊掉、解不出。
-- 实测一份 ~487KB 文本：拍照默认档 235 个二维码，截图极限档仅 53 个（详见 `output/RESULTS.md`）。
+- 实测一份 ~487KB 文本：默认档 (`chunk-size 800`) 约 118 个二维码，截图极限档 (`chunk-size 1800`) 仅 53 个（详见 `output/RESULTS.md`）。
 
 ### 可选：用 `make_diff.py` 生成仓库 diff
 
@@ -110,10 +115,11 @@ python make_diff.py /ext /int --ignore "*.log" "tmp"   # 额外忽略模式
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `input` | - | 要传输的输入文件（任意文件） |
-| `-o` | `qr_diff.html` | 输出 HTML 文件 |
+| `-o` | `output/qr-{chunk_size}-{时间戳}.html` | 输出 HTML 文件 |
 | `--cols` | `6` | 每行二维码数量 |
 | `--qr-size` | `180` | 二维码尺寸（像素） |
-| `--chunk-size` | `400` | 每片数据字节数 |
+| `--chunk-size` | `800` | 每片数据字节数 |
+| `--no-open` | - | 生成后不自动打开浏览器 |
 
 ### decoder.py
 | 参数 | 默认值 | 说明 |
@@ -136,10 +142,11 @@ python make_diff.py /ext /int --ignore "*.log" "tmp"   # 额外忽略模式
 ## 容错机制
 
 1. **QR 纠错**：M 级别（可纠 ~15% 错误）
-2. **数据校验**：每片 SHA256 校验
-3. **顺序无关**：靠分片头部的 index 重组，与拍摄顺序/位置无关
-4. **重复/缺失检测**：自动去重，缺片会明确报告
-5. **多图片支持**：可分多次拍摄
+2. **分片校验**：每片 12 字节头部含 SHA256 前 4 字节校验，不通过则丢弃
+3. **元数据片 (index 0)**：携带文件名、原始大小和整文件 SHA256；解码端据此验证还原结果按字节一致
+4. **顺序无关**：靠分片头部的 index 重组，与拍摄顺序/位置无关
+5. **重复/缺失检测**：自动去重，缺片会明确报告
+6. **多图片支持**：可分多次拍摄，所有图片中的二维码合并到同一个池
 
 ## 测试
 
