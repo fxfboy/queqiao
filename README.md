@@ -33,12 +33,11 @@ QueQiao（鹊桥）是在两个物理隔离、没有网络路径的世界之间�
 
 ## 安装依赖
 
-首次运行 `./run.sh`（或 `run.bat`）会自动创建 `.venv` 并安装依赖。手动安装：
+依赖由 `pyproject.toml` 声明，用 [uv](https://docs.astral.sh/uv/) 管理。首次运行 `./run.sh`（或 `run.bat`）会自动创建 `.venv` 并 `uv sync` 同步依赖。手动安装：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install qrcode[pil] Pillow opencv-python-headless pyzbar
+# 先装 uv：curl -LsSf https://astral.sh/uv/install.sh | sh   （或 brew install uv）
+uv sync                            # 创建 .venv 并安装依赖
 # pyzbar 需要本地 zbar 库：
 #   macOS:  brew install zbar
 #   Ubuntu: sudo apt-get install libzbar0
@@ -104,9 +103,9 @@ cd /path/to/repo && patch -p1 < restored.out
 `make_diff.py` 支持文件过滤：
 
 ```bash
-python make_diff.py /ext /int --ext .py .ts            # 只对比指定扩展名
-python make_diff.py /ext /int --no-gitignore           # 不读取 .gitignore
-python make_diff.py /ext /int --ignore "*.log" "tmp"   # 额外忽略模式
+uv run python make_diff.py /ext /int --ext .py .ts     # 只对比指定扩展名
+uv run python make_diff.py /ext /int --no-gitignore    # 不读取 .gitignore
+uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模式
 ```
 
 ## 参数
@@ -153,8 +152,8 @@ python make_diff.py /ext /int --ignore "*.log" "tmp"   # 额外忽略模式
 ```bash
 ./run.sh test        # test_roundtrip.py —— 纯逻辑字节往返
 ./run.sh verify      # verify_full.py —— 真·渲染+pyzbar 解码往返
-.venv/bin/python test_make_diff.py    # make_diff 目录对比
-.venv/bin/python test_cli.py          # 三个 CLI 的子进程冒烟测试
+uv run python test_make_diff.py       # make_diff 目录对比
+uv run python test_cli.py             # 三个 CLI 的子进程冒烟测试
 ```
 
 ## License

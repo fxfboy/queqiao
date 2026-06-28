@@ -1,15 +1,17 @@
 #!/bin/bash
 #
-# QueQiao (鹊桥) - 快速启动脚本
+# QueQiao (鹊桥) - 快速启动脚本（基于 uv）
 # 兼容 Linux, macOS, Windows (Git Bash)
 # 用法: ./run.sh encode <输入文件> [选项]
 #       ./run.sh decode photo1.jpg [photo2.jpg ...]
 #
+# 依赖由 pyproject.toml 声明，uv 在首次 `uv sync` 时自动创建 .venv 并同步依赖。
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
+cd "$SCRIPT_DIR"
 
 # 检测操作系统
 detect_os() {
@@ -23,90 +25,49 @@ detect_os() {
 
 OS=$(detect_os)
 
-# 获取 Python 命令
-get_python() {
-    if command -v python3 &> /dev/null; then
-        echo "python3"
-    elif command -v python &> /dev/null; then
-        echo "python"
-    else
-        echo "Error: Python not found" >&2
+# 确保 uv 已安装
+ensure_uv() {
+    if ! command -v uv &> /dev/null; then
+        echo "Error: 未找到 uv。请先安装 uv：" >&2
+        echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+        echo "  或: brew install uv / pipx install uv" >&2
         exit 1
     fi
 }
 
-PYTHON=$(get_python)
-
-# 获取虚拟环境激活脚本路径
-get_activate_script() {
-    if [ "$OS" = "windows" ]; then
-        echo "$VENV_DIR/Scripts/activate"
-    else
-        echo "$VENV_DIR/bin/activate"
-    fi
-}
-
-ACTIVATE_SCRIPT=$(get_activate_script)
-
-get_venv_python() {
-    if [ "$OS" = "windows" ]; then
-        echo "$VENV_DIR/Scripts/python"
-    else
-        echo "$VENV_DIR/bin/python"
-    fi
-}
-
-VENV_PYTHON=$(get_venv_python)
-
-# 确保虚拟环境存在
-setup_venv() {
-    if [ ! -d "$VENV_DIR" ]; then
-        echo "Creating virtual environment..."
-        $PYTHON -m venv "$VENV_DIR"
-        source "$ACTIVATE_SCRIPT"
-        
-        # 安装依赖
-        echo "Installing dependencies..."
-        pip install qrcode[pil] Pillow opencv-python-headless
-        
-        # 安装 pyzbar（需要额外处理）
-        install_pyzbar
-    else
-        source "$ACTIVATE_SCRIPT"
-    fi
-
-    PYTHON="$VENV_PYTHON"
-}
-
-# 安装 pyzbar 及其依赖
-install_pyzbar() {
+# 安装 pyzbar 运行时所需的原生 zbar 库（仅在首次创建 .venv 时尝试）
+install_zbar() {
     case "$OS" in
         macos)
-            # macOS 需要 brew 安装 zbar
             if ! command -v brew &> /dev/null; then
-                echo "Warning: Homebrew not found. pyzbar may not work."
-                echo "Install with: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+                echo "Warning: 未找到 Homebrew，pyzbar 可能无法工作。"
+                echo "安装: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
             else
                 brew install zbar 2>/dev/null || true
             fi
-            pip install pyzbar
             ;;
         linux)
-            # Linux 需要 apt 安装 libzbar
             if command -v apt-get &> /dev/null; then
                 sudo apt-get update && sudo apt-get install -y libzbar0 2>/dev/null || true
             elif command -v yum &> /dev/null; then
                 sudo yum install -y zbar 2>/dev/null || true
             fi
-            pip install pyzbar
             ;;
         windows)
-            # Windows: pyzbar 需要 Visual C++ Redistributable
-            echo "Note: On Windows, pyzbar may need Visual C++ Redistributable"
-            echo "Download from: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist"
-            pip install pyzbar
+            echo "Note: Windows 上 pyzbar 可能需要 Visual C++ Redistributable"
+            echo "下载: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist"
             ;;
     esac
+}
+
+# 首次运行前的准备：装好原生 zbar，并用 uv 同步依赖
+setup() {
+    ensure_uv
+    if [ ! -d "$VENV_DIR" ]; then
+        install_zbar
+        echo "Syncing dependencies with uv..."
+        uv sync
+    fi
 }
 
 # 设置环境变量
@@ -127,11 +88,16 @@ setup_env() {
     esac
 }
 
+# 用项目环境运行某个脚本（uv 会自动确保依赖已同步）
+run_py() {
+    uv run python "$@"
+}
+
 # 主流程
 main() {
-    setup_venv
+    setup
     setup_env
-    
+
     case "$1" in
         encode|e)
             shift
@@ -153,7 +119,7 @@ main() {
                 echo "  ./run.sh encode changes.patch -o qr.html"
                 exit 1
             fi
-            $PYTHON "$SCRIPT_DIR/encoder.py" "$@"
+            run_py "$SCRIPT_DIR/encoder.py" "$@"
             ;;
 
         diff)
@@ -171,9 +137,9 @@ main() {
                 echo "  ./run.sh diff /ext/repo /int/repo -o changes.patch"
                 exit 1
             fi
-            $PYTHON "$SCRIPT_DIR/make_diff.py" "$@"
+            run_py "$SCRIPT_DIR/make_diff.py" "$@"
             ;;
-        
+
         decode|d)
             shift
             if [ $# -lt 1 ]; then
@@ -185,17 +151,17 @@ main() {
                 echo "  --debug              显示调试信息"
                 exit 1
             fi
-            $PYTHON "$SCRIPT_DIR/decoder.py" "$@"
+            run_py "$SCRIPT_DIR/decoder.py" "$@"
             ;;
-        
+
         test|t)
-            $PYTHON "$SCRIPT_DIR/test_roundtrip.py"
+            run_py "$SCRIPT_DIR/test_roundtrip.py"
             ;;
-        
+
         verify|v)
-            $PYTHON "$SCRIPT_DIR/verify_full.py"
+            run_py "$SCRIPT_DIR/verify_full.py"
             ;;
-        
+
         *)
             echo "QueQiao (鹊桥) - 用二维码跨 air gap 摆渡任意文件"
             echo ""

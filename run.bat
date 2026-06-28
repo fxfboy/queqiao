@@ -1,46 +1,32 @@
 @echo off
-REM QueQiao (鹊桥) - Windows 批处理启动脚本
+REM QueQiao (鹊桥) - Windows 批处理启动脚本（基于 uv）
 REM 用法: run.bat encode <输入文件> [选项]
 REM       run.bat decode photo1.jpg [photo2.jpg ...]
+REM 依赖由 pyproject.toml 声明，uv 在首次 `uv sync` 时自动创建 .venv 并同步依赖。
 
 setlocal enabledelayedexpansion
 
 set SCRIPT_DIR=%~dp0
 set VENV_DIR=%SCRIPT_DIR%.venv
+cd /d "%SCRIPT_DIR%"
 
-REM 获取 Python 命令
-where python3 >nul 2>nul
-if %errorlevel%==0 (
-    set PYTHON=python3
-) else (
-    where python >nul 2>nul
-    if %errorlevel%==0 (
-        set PYTHON=python
-    ) else (
-        echo Error: Python not found
-        exit /b 1
-    )
+REM 确保 uv 已安装
+where uv >nul 2>nul
+if not %errorlevel%==0 (
+    echo Error: 未找到 uv。请先安装 uv：
+    echo   powershell -c "irm https://astral.sh/uv/install.ps1 ^| iex"
+    echo   或: pipx install uv
+    exit /b 1
 )
 
-REM 确保虚拟环境存在
-if not exist "%VENV_DIR%\Scripts\activate" (
-    echo Creating virtual environment...
-    %PYTHON% -m venv "%VENV_DIR%"
-    call "%VENV_DIR%\Scripts\activate.bat"
-    
-    echo Installing dependencies...
-    pip install qrcode[pil] Pillow opencv-python-headless pyzbar
-    
-    REM 提示安装 Visual C++ Redistributable
-    echo.
-    echo Note: pyzbar may need Visual C++ Redistributable
+REM 首次创建 .venv：提示原生依赖并用 uv 同步
+if not exist "%VENV_DIR%" (
+    echo Note: pyzbar 可能需要 Visual C++ Redistributable
     echo Download from: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
     echo.
-) else (
-    call "%VENV_DIR%\Scripts\activate.bat"
+    echo Syncing dependencies with uv...
+    uv sync
 )
-
-set PYTHON=%VENV_DIR%\Scripts\python.exe
 
 REM 处理命令
 if "%1"=="" goto :help
@@ -74,7 +60,7 @@ if "%1"=="" (
     echo   run.bat encode changes.patch -o qr.html
     exit /b 1
 )
-%PYTHON% "%SCRIPT_DIR%encoder.py" %*
+uv run python "%SCRIPT_DIR%encoder.py" %*
 goto :end
 
 :diff
@@ -89,7 +75,7 @@ if "%1"=="" (
     echo   --ignore pattern ... 额外的忽略模式
     exit /b 1
 )
-%PYTHON% "%SCRIPT_DIR%make_diff.py" %*
+uv run python "%SCRIPT_DIR%make_diff.py" %*
 goto :end
 
 :decode
@@ -103,15 +89,15 @@ if "%1"=="" (
     echo   --debug              显示调试信息
     exit /b 1
 )
-%PYTHON% "%SCRIPT_DIR%decoder.py" %*
+uv run python "%SCRIPT_DIR%decoder.py" %*
 goto :end
 
 :test
-%PYTHON% "%SCRIPT_DIR%test_roundtrip.py"
+uv run python "%SCRIPT_DIR%test_roundtrip.py"
 goto :end
 
 :verify
-%PYTHON% "%SCRIPT_DIR%verify_full.py"
+uv run python "%SCRIPT_DIR%verify_full.py"
 goto :end
 
 :help

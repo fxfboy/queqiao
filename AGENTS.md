@@ -10,7 +10,7 @@ The project's scope is **only the QR transfer** — it does not care how the inp
 
 ## Commands
 
-Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows CMD). These auto-create `.venv` and `pip install` deps on first run — there is **no `requirements.txt`**; the dependency list lives only inside the run scripts.
+Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows CMD). Dependencies are declared in **`pyproject.toml`** and managed by [uv](https://docs.astral.sh/uv/); the run scripts auto-create `.venv` and `uv sync` on first run, then dispatch via `uv run`. There is no `requirements.txt` (uv pins exact versions in `uv.lock`). The scripts still install the native zbar lib (brew/apt/yum), which uv cannot manage.
 
 ```bash
 ./run.sh encode <file> -o qr.html              # any file → QR HTML
@@ -20,13 +20,13 @@ Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows 
 ./run.sh verify                                # → verify_full.py (real QR via pyzbar)
 ```
 
-Direct invocation (after `source .venv/bin/activate`):
+Direct invocation (via `uv run`, which auto-syncs deps; or `python` after `source .venv/bin/activate`):
 
 ```bash
-python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
-python decoder.py <images-or-dirs...> -o out [--backend pyzbar|opencv] [--debug]
-python decode_pyzbar.py [image_dir=bid] [out=restored.out] # legacy pyzbar path, scans PNGs in a DIR
-python make_diff.py <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
+uv run python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
+uv run python decoder.py <images-or-dirs...> -o out [--backend pyzbar|opencv] [--debug]
+uv run python decode_pyzbar.py [image_dir=bid] [out=restored.out] # legacy pyzbar path, scans PNGs in a DIR
+uv run python make_diff.py <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
 ```
 
 ### Tests
@@ -35,7 +35,7 @@ Tests are **plain assert-based scripts, not pytest** — there is no per-test se
 
 - `test_roundtrip.py` — byte-roundtrip of the pipeline (arbitrary bytes → `encode_chunks` → HTML → simulated base85 decode → bytes). No diff or image deps. This is `run.sh test`.
 - `verify_full.py` / `test_qr_roundtrip.py` — render **real** QR PNGs and read them back with **pyzbar**, asserting byte-identical output. Self-contained: they encode an in-memory byte blob (no external fixtures). `run.sh verify` runs `verify_full.py`. (Run directly with `DYLD_LIBRARY_PATH=/opt/homebrew/lib` set so pyzbar finds libzbar.)
-- `test_make_diff.py` — directory-comparison logic for `make_diff.py`. `test_cli.py` — subprocess smoke tests for the three CLIs. (Neither is wired into `run.sh`; run with `.venv/bin/python`.)
+- `test_make_diff.py` — directory-comparison logic for `make_diff.py`. `test_cli.py` — subprocess smoke tests for the three CLIs. (Neither is wired into `run.sh`; run with `uv run python`.)
 
 ## Architecture
 
