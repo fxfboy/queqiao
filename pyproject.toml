@@ -6,8 +6,8 @@ requires-python = ">=3.9"
 dependencies = [
     "qrcode[pil]",
     "Pillow",
-    "opencv-python-headless",
     "pyzbar",
+    "zxing-cpp",
 ]
 
 [tool.uv]

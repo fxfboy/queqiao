@@ -5,7 +5,7 @@ QueQiao (鹊桥) - Decoder
 
 用法:
     python decoder.py photo1.jpg photo2.jpg -o restored.out
-    python decoder.py photos_dir -o restored.out --backend pyzbar
+    python decoder.py photos_dir -o restored.out --backend zxing
 """
 
 import os
@@ -114,156 +114,67 @@ class PyzbarQRDecoder(QRDecoderAdapter):
         return unique
 
 
-class OpenCVQRDecoder(QRDecoderAdapter):
-    name = 'opencv'
+class ZxingQRDecoder(QRDecoderAdapter):
+    name = 'zxing'
 
     def __init__(self):
         try:
-            import cv2
+            import zxingcpp
         except ImportError as e:
             raise RuntimeError(
-                "opencv backend is unavailable. Install opencv-python-headless: "
-                "pip install opencv-python-headless"
+                "zxing backend is unavailable. Install Python package zxing-cpp: "
+                "pip install zxing-cpp (pure wheel, no system library required)."
             ) from e
 
+        self.zxingcpp = zxingcpp
+        self.qrcode_format = zxingcpp.BarcodeFormat.QRCode
+
     def decode_image(self, image_path):
-        return [QRDecodeResult(**qr) for qr in decode_qr_from_image_opencv(image_path)]
-
-def preprocess_image(img):
-    """预处理图片，提高二维码检测率"""
-    import cv2
-    if len(img.shape) == 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = img.copy()
-    
-    results = [gray]
-    
-    # 自适应阈值
-    try:
-        adaptive = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, 11, 2
-        )
-        results.append(adaptive)
-    except:
-        pass
-    
-    # Otsu 阈值
-    try:
-        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        results.append(otsu)
-    except:
-        pass
-    
-    # 增强对比度
-    try:
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-        results.append(enhanced)
-    except:
-        pass
-    
-    # 反色
-    try:
-        inverted = cv2.bitwise_not(gray)
-        results.append(inverted)
-    except:
-        pass
-    
-    return results
-
-
-def decode_qr_from_image_opencv(image_path):
-    """
-    从图片中检测并解码所有二维码
-    返回: [{'data': bytes, 'x': int, 'y': int, 'w': int, 'h': int}, ...]
-    """
-    import cv2
-    img = cv2.imread(image_path)
-    if img is None:
-        raise ValueError(f"Cannot read image: {image_path}")
-    
-    detector = cv2.QRCodeDetector()
-    
-    all_results = []
-    seen_data = set()
-    
-    # 方法1: 使用 detectAndDecodeMulti
-    preprocessed = preprocess_image(img)
-    
-    for processed_img in preprocessed:
         try:
-            retval, decoded_info, points, straight_qrcode = detector.detectAndDecodeMulti(processed_img)
-            
-            if retval:
-                for i, info in enumerate(decoded_info):
-                    if info:
-                        data_bytes = info.encode('utf-8')
-                        data_hash = hashlib.md5(data_bytes).hexdigest()
-                        
-                        if data_hash not in seen_data:
-                            seen_data.add(data_hash)
-                            
-                            # 获取边界框
-                            if points is not None and i < len(points):
-                                pts = points[i]
-                                x = int(pts[:, 0].min())
-                                y = int(pts[:, 1].min())
-                                w = int(pts[:, 0].max() - x)
-                                h = int(pts[:, 1].max() - y)
-                            else:
-                                x, y, w, h = 0, 0, 0, 0
-                            
-                            all_results.append({
-                                'data': data_bytes,
-                                'x': x,
-                                'y': y,
-                                'w': w,
-                                'h': h,
-                            })
-        except Exception:
-            pass
-    
-    # 方法2: 尝试 detectAndDecode (单个二维码)
-    for processed_img in preprocessed:
-        try:
-            data, points, straight = detector.detectAndDecode(processed_img)
-            if data:
-                data_bytes = data.encode('utf-8')
-                data_hash = hashlib.md5(data_bytes).hexdigest()
-                
-                if data_hash not in seen_data:
-                    seen_data.add(data_hash)
-                    
-                    if points is not None and len(points) > 0:
-                        pts = points
-                        if len(pts.shape) == 3:
-                            pts = pts[0]
-                        x = int(pts[:, 0].min())
-                        y = int(pts[:, 1].min())
-                        w = int(pts[:, 0].max() - x)
-                        h = int(pts[:, 1].max() - y)
-                    else:
-                        x, y, w, h = 0, 0, 0, 0
-                    
-                    all_results.append({
-                        'data': data_bytes,
-                        'x': x,
-                        'y': y,
-                        'w': w,
-                        'h': h,
-                    })
-        except Exception:
-            pass
-    
-    return all_results
+            img = Image.open(image_path)
+        except Exception as e:
+            raise ValueError(f"Cannot read image: {image_path}") from e
+
+        results = []
+        for mode in [None, 'L']:
+            try:
+                test_img = img if mode is None else img.convert(mode)
+                results.extend(
+                    self.zxingcpp.read_barcodes(test_img, formats=self.qrcode_format)
+                )
+            except Exception:
+                pass
+
+        seen = set()
+        unique = []
+        for item in results:
+            data = bytes(item.bytes) if item.bytes else item.text.encode('utf-8')
+            data_hash = hashlib.md5(data).hexdigest()
+            if data_hash in seen:
+                continue
+            seen.add(data_hash)
+
+            x, y, w, h = 0, 0, 0, 0
+            pos = getattr(item, 'position', None)
+            if pos is not None:
+                xs = [pos.top_left.x, pos.top_right.x,
+                      pos.bottom_right.x, pos.bottom_left.x]
+                ys = [pos.top_left.y, pos.top_right.y,
+                      pos.bottom_right.y, pos.bottom_left.y]
+                x = int(min(xs))
+                y = int(min(ys))
+                w = int(max(xs) - x)
+                h = int(max(ys) - y)
+
+            unique.append(QRDecodeResult(data, x, y, w, h))
+
+        return unique
 
 
 def get_decoder_adapter(name):
     adapters = {
         PyzbarQRDecoder.name: PyzbarQRDecoder,
-        OpenCVQRDecoder.name: OpenCVQRDecoder,
+        ZxingQRDecoder.name: ZxingQRDecoder,
     }
     return adapters[name]()
 
@@ -482,11 +393,11 @@ def main():
   # 从多张照片解码（二维码分布在多页时）
   python decoder.py page1.jpg page2.jpg page3.jpg -o restored.out
 
-  # 从目录中的图片解码（默认使用 pyzbar）
+  # 从目录中的图片解码（默认使用 zxing-cpp, 纯 wheel 无系统库依赖）
   python decoder.py photos_dir -o restored.out
 
-  # 强制使用 OpenCV 后端
-  python decoder.py photos_dir -o restored.out --backend opencv
+  # 强制使用 pyzbar 后端 (需 zbar 系统库)
+  python decoder.py photos_dir -o restored.out --backend pyzbar
 
   # 如果还原出来的是一个 patch，可应用:
   patch -p1 < restored.out
@@ -495,8 +406,8 @@ def main():
     parser.add_argument('images', nargs='+', help='包含二维码的照片文件或目录')
     parser.add_argument('-o', '--output', default='restored.out',
                         help='输出文件 (默认: restored.out)')
-    parser.add_argument('--backend', choices=['pyzbar', 'opencv'], default='pyzbar',
-                        help='二维码识别后端 (默认: pyzbar)')
+    parser.add_argument('--backend', choices=['zxing', 'pyzbar'], default='zxing',
+                        help='二维码识别后端: zxing (纯 wheel, 默认) / pyzbar (需 zbar 系统库)')
     parser.add_argument('--debug', action='store_true', help='显示调试信息')
     
     args = parser.parse_args()
@@ -513,8 +424,8 @@ def main():
         print(f"❌ {e}")
         print()
         print("可选方案:")
-        print("  - 安装 zbar 后重试 pyzbar")
-        print("  - 或临时使用: --backend opencv")
+        print("  - 安装 zxing-cpp 后重试: pip install zxing-cpp (默认后端)")
+        print("  - 或使用 --backend pyzbar (需系统 zbar 库)")
         sys.exit(1)
 
     image_paths = expand_image_inputs(args.images)

@@ -24,7 +24,7 @@ Direct invocation (via `uv run`, which auto-syncs deps; or `python` after `sourc
 
 ```bash
 uv run python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
-uv run python decoder.py <images-or-dirs...> -o out [--backend pyzbar|opencv] [--debug]
+uv run python decoder.py <images-or-dirs...> -o out [--backend zxing|pyzbar] [--debug]
 uv run python decode_pyzbar.py [image_dir=bid] [out=restored.out] # legacy pyzbar path, scans PNGs in a DIR
 uv run python make_diff.py <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
 ```
@@ -45,7 +45,7 @@ Tests are **plain assert-based scripts, not pytest** — there is no per-test se
 encoder.py:  read_bytes(input file) → lzma(xz, preset 9|EXTREME) → split into chunks
              → build metadata JSON chunk (index 0) + data chunks (1..N)
              → prepend 12-byte header w/ checksum → base85 → qrcode → HTML grid
-decoder.py:  photo(s)/dir(s) → QR backend (pyzbar default, OpenCV optional)
+decoder.py:  photo(s)/dir(s) → QR backend (zxing-cpp default, pyzbar optional)
              → base85 decode → parse header / verify
              → extract metadata from index 0 → reassemble data chunks (1..N)
              → lzma decompress → verify whole-file SHA256 → write raw bytes
@@ -80,10 +80,10 @@ The `index`/`total` fields in the header — not image position — drive recons
 
 ### Two decoder implementations, different trade-offs
 
-- **pyzbar** (`decoder.py --backend pyzbar`, the `run.sh decode` default): generally far better at reading QRs from screen photos, but needs the **native zbar library** (`brew install zbar`; macOS also needs `DYLD_LIBRARY_PATH=/opt/homebrew/lib`, which `run.sh` sets). Accepts image files and directories of common image formats.
-- **OpenCV** (`decoder.py --backend opencv`): lazy-loaded — `cv2` and `numpy` are only imported when this backend is selected, so pyzbar-only usage does not require opencv installed. No native lib beyond the wheel. Compensates for weaker detection by running each photo through 5 preprocessing variants (gray, adaptive threshold, Otsu, CLAHE, inverted) and both `detectAndDecodeMulti` + `detectAndDecode`.
+- **zxing** (`decoder.py --backend zxing`, the **default** for `run.sh decode`): pure-wheel C++ port of ZXing (`pip install zxing-cpp`) — **no native system library to install**. Reads PIL images directly and exposes raw payload bytes via `barcode.bytes` (no utf-8 round-trip), and gives a 4-corner `position` we map to a bounding box. On pixel-perfect screenshot transfer (queqiao's primary use case) it is ~10–14× faster than pyzbar at 100% accuracy across chunk-sizes 800/1500/1800; on degraded photos (downsample + Gaussian blur + JPEG) the crash threshold is the same as pyzbar. See `bench_backends.py` for the reproducible benchmark.
+- **pyzbar** (`decoder.py --backend pyzbar`): opt-in legacy backend that wraps the **native zbar library** (`brew install zbar`; macOS also needs `DYLD_LIBRARY_PATH=/opt/homebrew/lib`, which `run.sh` sets). Kept as a fallback for specific samples where zxing fails to detect.
 
-When detection is the problem, prefer the pyzbar path.
+Default is zxing. Switch to pyzbar only when you have a concrete sample that zxing cannot decode.
 
 ### Directory comparison gotchas (`make_diff.py`)
 

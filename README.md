@@ -44,7 +44,7 @@ uv sync                            # 创建 .venv 并安装依赖
 #   Windows: 安装 Visual C++ Redistributable
 ```
 
-`./run.sh` 会在首次创建虚拟环境时尽力自动安装 zbar（macOS 使用 Homebrew，Linux 使用 apt/yum）。如果系统包管理器不可用或安装失败，请按上面的命令手动安装；也可以临时使用 `--backend opencv`。
+`./run.sh` 会在首次创建虚拟环境时尽力自动安装 zbar（macOS 使用 Homebrew，Linux 使用 apt/yum）。如果系统包管理器不可用或安装失败，可以按上面的命令手动安装；不想装 zbar 也行——默认后端 `zxing` 是纯 wheel，开箱即用。
 
 ## 使用方法
 
@@ -69,10 +69,10 @@ uv sync                            # 创建 .venv 并安装依赖
 # 不指定 -o 时，解码器会从元数据中读取原始文件名自动命名
 ```
 
-`decoder.py` 默认使用 pyzbar 检测二维码（识别更稳）。如果 zbar 系统库暂时不可用，可切到 OpenCV 后端：
+`decoder.py` 默认使用 zxing-cpp 检测二维码（纯 wheel、无系统库依赖，pixel-perfect 场景比 pyzbar 快约 10×）。如果想用 pyzbar 后端：
 
 ```bash
-./run.sh decode photos_dir -o restored.out --backend opencv
+./run.sh decode photos_dir -o restored.out --backend pyzbar
 ```
 
 ### 传输方式与 chunk-size 选择
@@ -125,7 +125,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 |------|--------|------|
 | `images` | - | 照片文件或目录（可多个） |
 | `-o` | `restored.out` | 输出文件 |
-| `--backend` | `pyzbar` | 识别后端：`pyzbar` 或 `opencv` |
+| `--backend` | `zxing` | 识别后端：`zxing`（纯 wheel）或 `pyzbar`（需 zbar 系统库） |
 | `--debug` | - | 显示调试信息 |
 
 ### make_diff.py（可选）

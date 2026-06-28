@@ -85,7 +85,7 @@ if "%1"=="" (
     echo.
     echo 选项:
     echo   -o FILE              输出文件 (默认: restored.out^)
-    echo   --backend NAME       识别后端: pyzbar/opencv (默认: pyzbar^)
+    echo   --backend NAME       识别后端: zxing/pyzbar (默认: zxing^)
     echo   --debug              显示调试信息
     exit /b 1
 )
