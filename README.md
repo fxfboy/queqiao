@@ -61,18 +61,20 @@ uv sync                            # 创建 .venv 并安装依赖
 ### 解码端（外网）—— 照片 → 文件
 
 ```bash
-./run.sh decode photo.jpg -o restored.out
+./run.sh decode photo.jpg
 # 多张照片:
-./run.sh decode photo1.jpg photo2.jpg -o restored.out
+./run.sh decode photo1.jpg photo2.jpg
 # 或直接扫描目录中的图片:
-./run.sh decode photos_dir -o restored.out
-# 输出值保持默认 restored.out 时，解码器会优先使用元数据里的原始文件名
+./run.sh decode photos_dir
+# 不传 -o 时，解码器会用元数据里的原始文件名；找不到时回退为 restored.out
+# 想强制指定输出名:
+./run.sh decode photos_dir -o my_output.bin
 ```
 
 `decoder.py` 默认使用 zxing-cpp 检测二维码（纯 wheel、无系统库依赖，pixel-perfect 场景比 pyzbar 快约 10×）。如果想用 pyzbar 后端：
 
 ```bash
-./run.sh decode photos_dir -o restored.out --backend pyzbar
+./run.sh decode photos_dir --backend pyzbar
 ```
 
 ### 传输方式与 chunk-size 选择
@@ -124,7 +126,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `images` | - | 照片文件或目录（可多个） |
-| `-o` | `restored.out` | 输出文件；保持默认值时会优先使用元数据里的原始文件名 |
+| `-o` | 元数据中的 filename，找不到时为 `restored.out` | 显式传任意值都按字面写入，不再读元数据 |
 | `--backend` | `zxing` | 识别后端：`zxing`（纯 wheel）或 `pyzbar`（需 zbar 系统库） |
 | `--debug` | - | 显示调试信息 |
 

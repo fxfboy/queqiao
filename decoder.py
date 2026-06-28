@@ -4,8 +4,9 @@ QueQiao (鹊桥) - Decoder
 从拍照图片中解码二维码，逐字节还原出原始文件。
 
 用法:
-    python decoder.py photo1.jpg photo2.jpg -o restored.out
-    python decoder.py photos_dir -o restored.out --backend zxing
+    python decoder.py photo1.jpg photo2.jpg          # 默认用元数据中的原始文件名
+    python decoder.py photos_dir -o my_output.bin    # 强制指定输出名
+    python decoder.py photos_dir --backend zxing     # 显式指定后端
 """
 
 import os
@@ -234,25 +235,28 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 从单张照片解码
-  python decoder.py photo.jpg -o restored.out
+  # 从单张照片解码（不传 -o, 用元数据中的原始文件名）
+  python decoder.py photo.jpg
 
   # 从多张照片解码（二维码分布在多页时）
-  python decoder.py page1.jpg page2.jpg page3.jpg -o restored.out
+  python decoder.py page1.jpg page2.jpg page3.jpg
 
   # 从目录中的图片解码（默认使用 zxing-cpp, 纯 wheel 无系统库依赖）
-  python decoder.py photos_dir -o restored.out
+  python decoder.py photos_dir
+
+  # 强制输出文件名 (不再读取元数据 filename)
+  python decoder.py photos_dir -o my_output.bin
 
   # 强制使用 pyzbar 后端 (需 zbar 系统库)
-  python decoder.py photos_dir -o restored.out --backend pyzbar
+  python decoder.py photos_dir --backend pyzbar
 
   # 如果还原出来的是一个 patch，可应用:
-  patch -p1 < restored.out
+  patch -p1 < <output>
 """
     )
     parser.add_argument('images', nargs='+', help='包含二维码的照片文件或目录')
-    parser.add_argument('-o', '--output', default='restored.out',
-                        help='输出文件 (默认: restored.out)')
+    parser.add_argument('-o', '--output', default=None,
+                        help='输出文件 (默认: 元数据中的原始文件名, 找不到时回退为 restored.out)')
     parser.add_argument('--backend', choices=available_backends(), default=DEFAULT_BACKEND,
                         help=f'二维码识别后端 (默认: {DEFAULT_BACKEND}); 详见 qr_backends/')
     parser.add_argument('--debug', action='store_true', help='显示调试信息')
@@ -371,12 +375,18 @@ def main():
         else:
             print(f"  ✅ SHA256 verified: {actual_sha256[:16]}...")
 
-    # Step 4: 确定输出文件名
-    if args.output == 'restored.out' and metadata and metadata.get('filename'):
-        name = metadata['filename'].replace('/', '').replace('\\', '').strip()
-        if name and name not in ('.', '..'):
+    # Step 4: 确定输出文件名 —— 用户未传 -o 时才从元数据回退
+    if args.output is None:
+        name = None
+        if metadata and metadata.get('filename'):
+            candidate = metadata['filename'].replace('/', '').replace('\\', '').strip()
+            if candidate and candidate not in ('.', '..'):
+                name = candidate
+        if name:
             args.output = name
             print(f"  📁 Using filename from metadata: {args.output}")
+        else:
+            args.output = 'restored.out'
 
     # Step 5: 保存（按字节写出，与输入逐字节一致）
     with open(args.output, 'wb') as f:
