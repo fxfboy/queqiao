@@ -24,7 +24,7 @@ Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows 
 Direct invocation (via `uv run`, which auto-syncs deps; or `python` after `source .venv/bin/activate`):
 
 ```bash
-uv run python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N]
+uv run python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
 uv run python decoder.py <images-or-dirs...> -o out [--backend zxing|pyzbar] [--debug]
 uv run python decode_pyzbar.py [image_dir=bid] [out=restored.out] # legacy pyzbar path, scans PNGs in a DIR
 uv run python make_diff.py <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
@@ -58,7 +58,7 @@ The pipeline is **byte-agnostic**: the encoder reads raw bytes and the decoder w
 
 ### chunk-size is transport-dependent (the default is deliberately conservative)
 
-QR count = ceil(compressed_size / chunk-size). The default `--chunk-size 800` balances density and reliability for most transfers. For **screenshot** transfer (pixel-perfect, lossless) you can go much larger — up to ~1800, where a single QR hits version 40 (the max; a chunk-size of ~2000+ raises a v41 error). Pair large chunks with a bigger `--qr-size` (>= the QR's native pixel size) or the screenshot's downsampling blurs the dense modules and decoding fails. Measured on a ~487KB text file: 235 codes (chunk-size 400) vs 53 codes (`chunk-size 1800`). See `output/RESULTS.md`.
+QR count = ceil(compressed_size / chunk-size). The default `--chunk-size 800` balances density and reliability for most transfers. For **screenshot** transfer (pixel-perfect, lossless) you can go much larger — up to ~1800, where a single QR hits version 40 (the max; a chunk-size of ~2000+ raises a v41 error). Pair large chunks with a bigger `--qr-size` (>= the QR's native pixel size) or the screenshot's downsampling blurs the dense modules and decoding fails. Measured on a ~487KB text file: 235 codes (chunk-size 400) vs 53 codes (`chunk-size 1800`).
 
 ### The chunk binary format is the load-bearing contract
 

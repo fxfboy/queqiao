@@ -66,7 +66,7 @@ uv sync                            # 创建 .venv 并安装依赖
 ./run.sh decode photo1.jpg photo2.jpg -o restored.out
 # 或直接扫描目录中的图片:
 ./run.sh decode photos_dir -o restored.out
-# 不指定 -o 时，解码器会从元数据中读取原始文件名自动命名
+# 输出值保持默认 restored.out 时，解码器会优先使用元数据里的原始文件名
 ```
 
 `decoder.py` 默认使用 zxing-cpp 检测二维码（纯 wheel、无系统库依赖，pixel-perfect 场景比 pyzbar 快约 10×）。如果想用 pyzbar 后端：
@@ -87,7 +87,7 @@ uv sync                            # 创建 .venv 并安装依赖
 
 - `--chunk-size` 上限约为 **1800**：再大单个二维码会超出 QR version 40 的容量，编码器报错。
 - 截图场景务必把 `--qr-size` 调到 ≥ 单码原图尺寸（高密度码原图更大），否则浏览器/截图下采样会让密集模块糊掉、解不出。
-- 实测一份 ~487KB 文本：默认档 (`chunk-size 800`) 约 118 个二维码，截图极限档 (`chunk-size 1800`) 仅 53 个（详见 `output/RESULTS.md`）。
+- 实测一份 ~487KB 文本：默认档 (`chunk-size 800`) 约 118 个二维码，截图极限档 (`chunk-size 1800`) 仅 53 个。
 
 ### 可选：用 `make_diff.py` 生成仓库 diff
 
@@ -124,7 +124,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `images` | - | 照片文件或目录（可多个） |
-| `-o` | `restored.out` | 输出文件 |
+| `-o` | `restored.out` | 输出文件；保持默认值时会优先使用元数据里的原始文件名 |
 | `--backend` | `zxing` | 识别后端：`zxing`（纯 wheel）或 `pyzbar`（需 zbar 系统库） |
 | `--debug` | - | 显示调试信息 |
 
@@ -153,7 +153,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 ./run.sh test        # test_roundtrip.py —— 纯逻辑字节往返
 ./run.sh verify      # verify_full.py —— 真·渲染+pyzbar 解码往返
 uv run python test_make_diff.py       # make_diff 目录对比
-uv run python test_cli.py             # 三个 CLI 的子进程冒烟测试
+uv run python test_cli.py             # CLI 子进程冒烟测试；含 pyzbar 用例，需可用 zbar
 ```
 
 ## 扩展：新增二维码解码后端

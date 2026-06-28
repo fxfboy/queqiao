@@ -14,7 +14,8 @@ Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows 
 
 ```bash
 ./run.sh encode <file> -o qr.html              # any file → QR HTML
-./run.sh decode photo1.jpg photo2.jpg -o out   # pyzbar decoder (default)
+./run.sh decode photo1.jpg photo2.jpg -o out   # zxing-cpp decoder (default, no native lib)
+./run.sh decode photos -o out --backend pyzbar # opt-in pyzbar (needs system zbar)
 ./run.sh diff <base-dir> <target-dir> -o d.patch  # OPTIONAL: dir diff → patch file
 ./run.sh test                                  # → test_roundtrip.py (byte roundtrip)
 ./run.sh verify                                # → verify_full.py (real QR via pyzbar)
@@ -57,7 +58,7 @@ The pipeline is **byte-agnostic**: the encoder reads raw bytes and the decoder w
 
 ### chunk-size is transport-dependent (the default is deliberately conservative)
 
-QR count = ceil(compressed_size / chunk-size). The default `--chunk-size 800` balances density and reliability for most transfers. For **screenshot** transfer (pixel-perfect, lossless) you can go much larger — up to ~1800, where a single QR hits version 40 (the max; a chunk-size of ~2000+ raises a v41 error). Pair large chunks with a bigger `--qr-size` (>= the QR's native pixel size) or the screenshot's downsampling blurs the dense modules and decoding fails. Measured on a ~487KB text file: 235 codes (chunk-size 400) vs 53 codes (`chunk-size 1800`). See `output/RESULTS.md`.
+QR count = ceil(compressed_size / chunk-size). The default `--chunk-size 800` balances density and reliability for most transfers. For **screenshot** transfer (pixel-perfect, lossless) you can go much larger — up to ~1800, where a single QR hits version 40 (the max; a chunk-size of ~2000+ raises a v41 error). Pair large chunks with a bigger `--qr-size` (>= the QR's native pixel size) or the screenshot's downsampling blurs the dense modules and decoding fails. Measured on a ~487KB text file: 235 codes (chunk-size 400) vs 53 codes (`chunk-size 1800`).
 
 ### The chunk binary format is the load-bearing contract
 
