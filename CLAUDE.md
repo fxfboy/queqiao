@@ -79,12 +79,17 @@ Data chunks occupy indices 1..N. The `total` field in every header = N+1 (metada
 
 The `index`/`total` fields in the header — not image position — drive reconstruction. Decoders dedupe by index, drop chunks failing the SHA256 check, and abort listing any missing indices. Consequence: `decoder.py`'s `sort_qr_by_position()` is essentially cosmetic, and `decode_pyzbar.py` skips sorting entirely. Multi-photo decode works by concatenating all detected QRs across all images into one pool.
 
-### Two decoder implementations, different trade-offs
+### Decoder backends live in `qr_backends/`
 
-- **zxing** (`decoder.py --backend zxing`, the **default** for `run.sh decode`): pure-wheel C++ port of ZXing (`pip install zxing-cpp`) — **no native system library to install**. Reads PIL images directly and exposes raw payload bytes via `barcode.bytes` (no utf-8 round-trip), and gives a 4-corner `position` we map to a bounding box. On pixel-perfect screenshot transfer (queqiao's primary use case) it is ~10–14× faster than pyzbar at 100% accuracy across chunk-sizes 800/1500/1800; on degraded photos (downsample + Gaussian blur + JPEG) the crash threshold is the same as pyzbar — neither offers a robustness edge on dense v40-class codes once downsampling drops below ~30% with blur. See `bench_backends.py` for the reproducible benchmark.
-- **pyzbar** (`decoder.py --backend pyzbar`): opt-in legacy backend that wraps the **native zbar library** (`brew install zbar`; macOS also needs `DYLD_LIBRARY_PATH=/opt/homebrew/lib`, which `run.sh` sets). Kept as a fallback for specific samples where zxing fails to detect — currently no such samples are documented.
+Backends are pluggable. Each is one module that subclasses `qr_backends.base.QRDecoderAdapter` and implements `decode_image(path) -> list[QRDecodeResult]`. Registration is explicit in `qr_backends/__init__.py` — the dict order defines `available_backends()` order, and `DEFAULT_BACKEND` is the CLI default. `decoder.py` only talks to the registry (`get_backend(name)`); it does not know which backends exist.
 
-Default is zxing. Switch to pyzbar only when you have a concrete sample that zxing cannot decode.
+To add a new backend: write `qr_backends/<name>_backend.py`, then import + register it in `qr_backends/__init__.py`. The CLI's `--backend` choices update automatically.
+
+Currently shipped:
+- **zxing** (`--backend zxing`, **default**): pure-wheel C++ port of ZXing (`pip install zxing-cpp`) — **no native system library to install**. Reads PIL images directly and exposes raw payload bytes via `barcode.bytes` (no utf-8 round-trip), and gives a 4-corner `position` we map to a bounding box. On pixel-perfect screenshot transfer (queqiao's primary use case) it is ~10–14× faster than pyzbar at 100% accuracy across chunk-sizes 800/1500/1800; on degraded photos (downsample + Gaussian blur + JPEG) the crash threshold is the same as pyzbar — neither offers a robustness edge on dense v40-class codes once downsampling drops below ~30% with blur. See `bench_backends.py` for the reproducible benchmark.
+- **pyzbar** (`--backend pyzbar`): opt-in legacy backend that wraps the **native zbar library** (`brew install zbar`; macOS also needs `DYLD_LIBRARY_PATH=/opt/homebrew/lib`, which `run.sh` sets). Kept as a fallback for specific samples where zxing fails to detect — currently no such samples are documented.
+
+Switch to pyzbar only when you have a concrete sample that zxing cannot decode.
 
 ### Directory comparison gotchas (`make_diff.py`)
 

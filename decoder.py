@@ -17,166 +17,13 @@ import json
 import argparse
 import base64
 from pathlib import Path
-from abc import ABC, abstractmethod
 
-from PIL import Image
+from qr_backends import DEFAULT_BACKEND, available_backends, get_backend
 
-
-# ──────────────────────────────────────────────────────────────
-# 1. 从图片中检测和解码二维码 (adapter implementations)
-# ──────────────────────────────────────────────────────────────
 
 IMAGE_EXTENSIONS = {
     '.bmp', '.gif', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp'
 }
-
-
-class QRDecodeResult:
-    """A decoded QR payload with optional positional metadata."""
-
-    def __init__(self, data, x=0, y=0, w=0, h=0):
-        self.data = data
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
-
-    def as_position_dict(self):
-        return {
-            'data': self.data,
-            'x': self.x,
-            'y': self.y,
-            'w': self.w,
-            'h': self.h,
-        }
-
-
-class QRDecoderAdapter(ABC):
-    """Adapter interface for QR detection backends."""
-
-    name = None
-
-    @abstractmethod
-    def decode_image(self, image_path):
-        """Return a list of QRDecodeResult objects decoded from image_path."""
-
-
-class PyzbarQRDecoder(QRDecoderAdapter):
-    name = 'pyzbar'
-
-    def __init__(self):
-        try:
-            from pyzbar.pyzbar import decode as pyzbar_decode, ZBarSymbol
-        except ImportError as e:
-            raise RuntimeError(
-                "pyzbar backend is unavailable. Install Python package pyzbar "
-                "and the native zbar library (macOS: brew install zbar; "
-                "Linux: install libzbar0/zbar; Windows: install zbar/VC runtime)."
-            ) from e
-
-        self.pyzbar_decode = pyzbar_decode
-        self.qrcode_symbol = ZBarSymbol.QRCODE
-
-    def decode_image(self, image_path):
-        try:
-            img = Image.open(image_path)
-        except Exception as e:
-            raise ValueError(f"Cannot read image: {image_path}") from e
-
-        results = []
-        for mode in [None, 'L', '1']:
-            try:
-                test_img = img if mode is None else img.convert(mode)
-                results.extend(
-                    self.pyzbar_decode(test_img, symbols=[self.qrcode_symbol])
-                )
-            except Exception:
-                pass
-
-        seen = set()
-        unique = []
-        for item in results:
-            data_hash = hashlib.md5(item.data).hexdigest()
-            if data_hash in seen:
-                continue
-            seen.add(data_hash)
-
-            x, y, w, h = 0, 0, 0, 0
-            rect = getattr(item, 'rect', None)
-            if rect is not None:
-                x = getattr(rect, 'left', 0)
-                y = getattr(rect, 'top', 0)
-                w = getattr(rect, 'width', 0)
-                h = getattr(rect, 'height', 0)
-
-            unique.append(QRDecodeResult(item.data, x, y, w, h))
-
-        return unique
-
-
-class ZxingQRDecoder(QRDecoderAdapter):
-    name = 'zxing'
-
-    def __init__(self):
-        try:
-            import zxingcpp
-        except ImportError as e:
-            raise RuntimeError(
-                "zxing backend is unavailable. Install Python package zxing-cpp: "
-                "pip install zxing-cpp (pure wheel, no system library required)."
-            ) from e
-
-        self.zxingcpp = zxingcpp
-        self.qrcode_format = zxingcpp.BarcodeFormat.QRCode
-
-    def decode_image(self, image_path):
-        try:
-            img = Image.open(image_path)
-        except Exception as e:
-            raise ValueError(f"Cannot read image: {image_path}") from e
-
-        results = []
-        for mode in [None, 'L']:
-            try:
-                test_img = img if mode is None else img.convert(mode)
-                results.extend(
-                    self.zxingcpp.read_barcodes(test_img, formats=self.qrcode_format)
-                )
-            except Exception:
-                pass
-
-        seen = set()
-        unique = []
-        for item in results:
-            data = bytes(item.bytes) if item.bytes else item.text.encode('utf-8')
-            data_hash = hashlib.md5(data).hexdigest()
-            if data_hash in seen:
-                continue
-            seen.add(data_hash)
-
-            x, y, w, h = 0, 0, 0, 0
-            pos = getattr(item, 'position', None)
-            if pos is not None:
-                xs = [pos.top_left.x, pos.top_right.x,
-                      pos.bottom_right.x, pos.bottom_left.x]
-                ys = [pos.top_left.y, pos.top_right.y,
-                      pos.bottom_right.y, pos.bottom_left.y]
-                x = int(min(xs))
-                y = int(min(ys))
-                w = int(max(xs) - x)
-                h = int(max(ys) - y)
-
-            unique.append(QRDecodeResult(data, x, y, w, h))
-
-        return unique
-
-
-def get_decoder_adapter(name):
-    adapters = {
-        PyzbarQRDecoder.name: PyzbarQRDecoder,
-        ZxingQRDecoder.name: ZxingQRDecoder,
-    }
-    return adapters[name]()
 
 
 def expand_image_inputs(inputs):
@@ -406,8 +253,8 @@ def main():
     parser.add_argument('images', nargs='+', help='包含二维码的照片文件或目录')
     parser.add_argument('-o', '--output', default='restored.out',
                         help='输出文件 (默认: restored.out)')
-    parser.add_argument('--backend', choices=['zxing', 'pyzbar'], default='zxing',
-                        help='二维码识别后端: zxing (纯 wheel, 默认) / pyzbar (需 zbar 系统库)')
+    parser.add_argument('--backend', choices=available_backends(), default=DEFAULT_BACKEND,
+                        help=f'二维码识别后端 (默认: {DEFAULT_BACKEND}); 详见 qr_backends/')
     parser.add_argument('--debug', action='store_true', help='显示调试信息')
     
     args = parser.parse_args()
@@ -419,7 +266,7 @@ def main():
     print()
 
     try:
-        adapter = get_decoder_adapter(args.backend)
+        adapter = get_backend(args.backend)
     except RuntimeError as e:
         print(f"❌ {e}")
         print()

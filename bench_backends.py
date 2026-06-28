@@ -20,11 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image, ImageFilter
 from encoder import encode_chunks, chunk_to_qr_image
-from decoder import (
-    PyzbarQRDecoder,
-    ZxingQRDecoder,
-    decode_and_merge_chunks,
-)
+from decoder import decode_and_merge_chunks
+from qr_backends import PyzbarQRDecoder, ZxingQRDecoder
 
 
 BACKENDS = [

@@ -156,6 +156,52 @@ uv run python test_make_diff.py       # make_diff 目录对比
 uv run python test_cli.py             # 三个 CLI 的子进程冒烟测试
 ```
 
+## 扩展：新增二维码解码后端
+
+所有解码后端都在 `qr_backends/` 目录下，每个后端是一个独立模块，注册在 `qr_backends/__init__.py` 的 `_REGISTRY` 里。`decoder.py` 只通过 `get_backend(name)` / `available_backends()` / `DEFAULT_BACKEND` 这三个 API 访问注册表，不感知具体后端。
+
+加一个新后端两步：
+
+**1. 新建 `qr_backends/<name>_backend.py`**，继承 `QRDecoderAdapter`：
+
+```python
+# qr_backends/foo_backend.py
+from PIL import Image
+from .base import QRDecoderAdapter, QRDecodeResult
+
+class FooQRDecoder(QRDecoderAdapter):
+    name = 'foo'    # CLI 上 --backend 用的标识符
+
+    def __init__(self):
+        try:
+            import foolib                          # 第三方依赖 lazy-import
+        except ImportError as e:
+            raise RuntimeError("foo backend 不可用，请 pip install foolib") from e
+        self.foolib = foolib
+
+    def decode_image(self, image_path):
+        # 返回 list[QRDecodeResult]；每个 result 含 data (bytes) + 可选边界框 (x,y,w,h)
+        img = Image.open(image_path)
+        codes = self.foolib.scan(img)
+        return [QRDecodeResult(c.payload, c.x, c.y, c.w, c.h) for c in codes]
+```
+
+**2. 在 `qr_backends/__init__.py` 里 import 并加入 `_REGISTRY`**：
+
+```python
+from .foo_backend import FooQRDecoder
+
+_REGISTRY = {
+    ZxingQRDecoder.name: ZxingQRDecoder,
+    PyzbarQRDecoder.name: PyzbarQRDecoder,
+    FooQRDecoder.name: FooQRDecoder,   # 新增
+}
+```
+
+完成。`decoder.py --backend foo` 自动可用，`--help` 里也会列出。如要把它设为默认，把 `DEFAULT_BACKEND = FooQRDecoder.name`。
+
+性能/准确率对比可以丢给 `bench_backends.py`：在 `BACKENDS` 列表里加上 `(FooQRDecoder, 'foo')`，跑一次就能对比 pixel-perfect 速度和退化场景下的鲁棒性。
+
 ## License
 
 MIT
