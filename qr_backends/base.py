@@ -41,6 +41,7 @@ class QRDecoderAdapter(ABC):
     """
 
     name: str = None
+    payload_encoding: str = 'base85'
 
     @abstractmethod
     def decode_image(self, image_path):

@@ -17,10 +17,13 @@ import webbrowser
 import base64
 import math
 import time
+import tempfile
 from pathlib import Path
 from io import BytesIO
 
 import qrcode
+
+from jabcode_cli import find_executable, run_writer
 
 
 # ──────────────────────────────────────────────────────────────
@@ -97,16 +100,39 @@ def chunk_to_qr_image(payload, box_size=5, border=2):
     return qr.make_image(fill_color="black", back_color="white")
 
 
-def generate_html(chunks, output_path, cols=6, qr_size=180):
-    """生成 HTML 页面，网格显示所有二维码"""
+def chunk_to_jab_image(payload, colors=8, module_size=12, ecc_level=3,
+                       executable=None):
+    """Use the official reference writer to encode raw bytes as JAB Code."""
+    with tempfile.TemporaryDirectory(prefix="queqiao-jab-png-") as temp_dir:
+        output_path = Path(temp_dir) / "code.png"
+        run_writer(
+            payload, output_path, colors=colors, module_size=module_size,
+            ecc_level=ecc_level, executable=executable,
+        )
+        from PIL import Image
+        with Image.open(output_path) as image:
+            return image.convert("RGB").copy()
+
+
+def generate_html(chunks, output_path, cols=6, qr_size=180, backend='qr',
+                  jab_colors=8, jab_module_size=12, jab_ecc_level=3):
+    """生成 HTML 页面，网格显示所有 QR 或 JAB Code。"""
     
     total = len(chunks)
     rows = math.ceil(total / cols)
     
-    # 预生成所有二维码的 base64
+    jab_writer = find_executable("writer") if backend == 'jab' else None
+
+    # 预生成所有码图的 base64
     qr_images = []
     for idx, payload in enumerate(chunks):
-        img = chunk_to_qr_image(payload, box_size=4, border=2)
+        if backend == 'jab':
+            img = chunk_to_jab_image(
+                payload, colors=jab_colors, module_size=jab_module_size,
+                ecc_level=jab_ecc_level, executable=jab_writer,
+            )
+        else:
+            img = chunk_to_qr_image(payload, box_size=4, border=2)
         buf = BytesIO()
         img.save(buf, format='PNG')
         b64 = base64.b64encode(buf.getvalue()).decode('ascii')
@@ -114,7 +140,7 @@ def generate_html(chunks, output_path, cols=6, qr_size=180):
         
         # 进度
         if (idx + 1) % 10 == 0 or idx == total - 1:
-            print(f"  Generating QR codes: {idx+1}/{total}", end='\r')
+            print(f"  Generating {backend.upper()} codes: {idx+1}/{total}", end='\r')
     
     print()
     
@@ -123,7 +149,7 @@ def generate_html(chunks, output_path, cols=6, qr_size=180):
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<title>QueQiao (鹊桥) - {total} codes</title>
+<title>QueQiao (鹊桥) - {total} {backend.upper()} codes</title>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{
@@ -195,7 +221,7 @@ body {{
 <body>
 <div class="header">
     <h1>QueQiao (鹊桥)</h1>
-    <p>Total: <strong>{total}</strong> QR codes | 
+    <p>Total: <strong>{total}</strong> {backend.upper()} codes |
        Grid: {cols} cols × {rows} rows | 
        Print this page for backup</p>
 </div>
@@ -206,7 +232,7 @@ body {{
         html += f"""
 <div class="qr-item">
     <span class="num">#{idx+1}</span>
-    <img src="data:image/png;base64,{b64_img}" alt="QR {idx+1}">
+    <img src="data:image/png;base64,{b64_img}" alt="{backend.upper()} {idx+1}">
     <div class="qr-label">{idx+1}/{total}</div>
 </div>
 """
@@ -250,16 +276,31 @@ def main():
     parser.add_argument('input', help='要传输的输入文件 (任意文件)')
     parser.add_argument('-o', '--output', default=None,
                         help='输出 HTML 文件 (默认: output/qr-{chunk_size}-{timestamp}.html)')
-    parser.add_argument('--cols', type=int, default=6,
-                        help='每行显示的二维码数量 (默认: 6)')
-    parser.add_argument('--qr-size', type=int, default=180,
-                        help='二维码图片尺寸/像素 (默认: 180)')
-    parser.add_argument('--chunk-size', type=int, default=800,
-                        help='每个分片的数据字节数 (默认: 800)')
+    parser.add_argument('--cols', type=int, default=None,
+                        help='每行显示的码数量 (默认: QR 6, JAB 1)')
+    parser.add_argument('--qr-size', type=int, default=None,
+                        help='HTML 中码图尺寸/像素 (默认: QR 180, JAB 900)')
+    parser.add_argument('--chunk-size', type=int, default=None,
+                        help='每个分片的数据字节数 (默认: QR 800, JAB 3000)')
+    parser.add_argument('--backend', choices=('qr', 'jab'), default='qr',
+                        help='码制后端: qr 或 jab (默认: qr)')
+    parser.add_argument('--jab-colors', type=int, choices=(4, 8), default=8,
+                        help='JAB Code 颜色数 (默认: 8)')
+    parser.add_argument('--jab-module-size', type=int, default=12,
+                        help='JAB Code 单模块像素数 (默认: 12)')
+    parser.add_argument('--jab-ecc-level', type=int, choices=range(1, 11), default=3,
+                        help='JAB Code 纠错级别 1-10 (默认: 3, 约 6%%)')
     parser.add_argument('--no-open', action='store_true',
                         help='生成后不自动打开浏览器 (默认: 自动打开)')
 
     args = parser.parse_args()
+
+    if args.chunk_size is None:
+        args.chunk_size = 3000 if args.backend == 'jab' else 800
+    if args.cols is None:
+        args.cols = 1 if args.backend == 'jab' else 6
+    if args.qr_size is None:
+        args.qr_size = 900 if args.backend == 'jab' else 180
 
     if args.output is None:
         timestamp = time.strftime('%Y%m%d-%H%M%S')
@@ -286,21 +327,31 @@ def main():
         print("❌ Input file is empty, nothing to encode.")
         sys.exit(1)
 
-    print(f"[2/2] Encoding (chunk_size={args.chunk_size})...")
+    print(f"[2/2] Encoding (backend={args.backend}, chunk_size={args.chunk_size})...")
     chunks, original_size, compressed_size = encode_chunks(data, chunk_size=args.chunk_size, filename=input_path.name)
     compression_ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
     print(f"  Original:   {original_size:,} bytes")
     print(f"  Compressed: {compressed_size:,} bytes ({compression_ratio:.1f}% saved)")
-    print(f"  QR codes:   {len(chunks)}")
+    print(f"  Codes:      {len(chunks)}")
     print()
 
-    output_path = generate_html(chunks, args.output, cols=args.cols, qr_size=args.qr_size)
+    try:
+        output_path = generate_html(
+            chunks, args.output, cols=args.cols, qr_size=args.qr_size,
+            backend=args.backend, jab_colors=args.jab_colors,
+            jab_module_size=args.jab_module_size,
+            jab_ecc_level=args.jab_ecc_level,
+        )
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
 
     print()
     print("=" * 60)
     print("✅ Done!")
     print(f"  HTML: {output_path}")
-    print(f"  QR codes: {len(chunks)}")
+    print(f"  Backend: {args.backend}")
+    print(f"  Codes:   {len(chunks)}")
     print()
     print("  拍照提示:")
     print("    1. 在浏览器中打开 HTML 文件并全屏 (F11)")

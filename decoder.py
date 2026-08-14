@@ -100,7 +100,7 @@ def sort_qr_by_position(qr_list):
 # 3. 解码分片数据
 # ──────────────────────────────────────────────────────────────
 
-def decode_single_chunk(b85_data):
+def decode_single_chunk(payload, payload_encoding='base85'):
     """
     解码单个分片
     
@@ -119,11 +119,14 @@ def decode_single_chunk(b85_data):
     
     try:
         # 如果是字符串，编码为 bytes
-        if isinstance(b85_data, str):
-            b85_data = b85_data.encode('ascii')
-        
-        # base85 解码
-        raw = base64.b85decode(b85_data)
+        if payload_encoding == 'base85':
+            if isinstance(payload, str):
+                payload = payload.encode('ascii')
+            raw = base64.b85decode(payload)
+        elif payload_encoding == 'raw':
+            raw = payload.encode('latin1') if isinstance(payload, str) else payload
+        else:
+            raise ValueError(f"Unknown payload encoding: {payload_encoding}")
         
         # 检查最小长度
         if len(raw) < HEADER_SIZE:
@@ -154,7 +157,7 @@ def decode_single_chunk(b85_data):
         return None
 
 
-def decode_and_merge_chunks(qr_data_list):
+def decode_and_merge_chunks(qr_data_list, payload_encoding='base85'):
     """
     解码所有分片，合并数据
 
@@ -166,7 +169,7 @@ def decode_and_merge_chunks(qr_data_list):
     invalid_count = 0
 
     for b85_data in qr_data_list:
-        result = decode_single_chunk(b85_data)
+        result = decode_single_chunk(b85_data, payload_encoding=payload_encoding)
 
         if result is None:
             invalid_count += 1
@@ -303,8 +306,7 @@ def main():
             sorted_qr = sort_qr_by_position(qr_list)
             
             for i, qr in enumerate(sorted_qr):
-                data_str = qr['data'].decode('utf-8', errors='replace')
-                all_qr_data.append(data_str)
+                all_qr_data.append(qr['data'])
                 
                 if args.debug:
                     print(f"    #{i+1}: pos=({qr['x']},{qr['y']}) size={qr['w']}x{qr['h']}")
@@ -335,7 +337,9 @@ def main():
     print("[🔧] Decoding and verifying chunks...")
 
     try:
-        compressed_data, stats, metadata = decode_and_merge_chunks(all_qr_data)
+        compressed_data, stats, metadata = decode_and_merge_chunks(
+            all_qr_data, payload_encoding=adapter.payload_encoding,
+        )
     except ValueError as e:
         print(f"\n❌ Failed: {e}")
         sys.exit(1)

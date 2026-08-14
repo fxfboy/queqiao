@@ -51,6 +51,8 @@ if "%1"=="" (
     echo   --cols N             每行二维码数量 (默认: 6^)
     echo   --qr-size N          二维码尺寸 (默认: 180^)
     echo   --chunk-size N       每片字节数 (默认: 800^)
+    echo   --backend qr^|jab     码制后端 (默认: qr^)
+    echo   --jab-colors 4^|8     JAB Code 颜色数 (默认: 8^)
     echo   --no-open            生成后不自动打开浏览器 (默认: 自动打开^)
     echo.
     echo 示例:
@@ -85,7 +87,7 @@ if "%1"=="" (
     echo.
     echo 选项:
     echo   -o FILE              输出文件 (默认: restored.out^)
-    echo   --backend NAME       识别后端: zxing/pyzbar (默认: zxing^)
+    echo   --backend NAME       识别后端: zxing/pyzbar/jab (默认: zxing^)
     echo   --debug              显示调试信息
     exit /b 1
 )

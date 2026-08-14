@@ -19,7 +19,8 @@ QueQiao（鹊桥）是在两个物理隔离、没有网络路径的世界之间�
     12 字节头部 (magic + index + total + datalen + SHA256[:4])
         │
         ▼
-    base85 编码 → 生成 QR 码 → HTML 页面 (自动打开浏览器)
+    QR: base85 编码 → QR 码；JAB: 原始二进制 → 彩色 JAB Code
+        → HTML 页面 (自动打开浏览器)
         │
         ▼
     📸 全屏显示 → 拍照/截图 → 传到对端
@@ -44,6 +45,12 @@ uv sync                            # 创建 .venv 并安装依赖
 #   Windows: 安装 Visual C++ Redistributable
 ```
 
+JAB Code 是可选 backend，使用其官方 C 参考实现。分别构建
+`jabcodeWriter` 和 `jabcodeReader` 后放入 `PATH`；也可以通过
+`QUEQIAO_JAB_WRITER` / `QUEQIAO_JAB_READER` 指向可执行文件。源码与构建说明：
+<https://github.com/jabcode/jabcode>。这些原生工具不属于 Python 包，`uv sync`
+不会安装它们。
+
 `./run.sh` 会在首次创建虚拟环境时尽力自动安装 zbar（macOS 使用 Homebrew，Linux 使用 apt/yum）。如果系统包管理器不可用或安装失败，可以按上面的命令手动安装；不想装 zbar 也行——默认后端 `zxing` 是纯 wheel，开箱即用。
 
 ## 使用方法
@@ -57,6 +64,22 @@ uv sync                            # 创建 .venv 并安装依赖
 ```
 
 浏览器打开后按 **F11** 全屏，保持屏幕水平、亮度充足，用手机/相机拍下所有二维码（或直接截图）。
+
+### JAB Code 高容量模式
+
+JAB Code 用 8 色模块承载原始二进制分片，省掉 QR 路径约 25% 的 base85
+文本膨胀，并利用彩色模块提高单码容量。编码和解码必须成对选择 JAB backend：
+
+```bash
+./run.sh encode input.bin -o jab.html --backend jab
+./run.sh decode jab-photo.png -o restored.bin --backend jab
+```
+
+JAB 默认使用 `chunk-size=3000`、单列 900px 展示、8 色和纠错级别 3；可用
+`--jab-colors`、`--jab-module-size`、`--jab-ecc-level` 调整。官方 reader 一次
+读取一幅完整 JAB Code，不提供一张照片中的多码检测，因此每个输入图片应只
+包含一个码。对 HTML 整页截图时，需要先按码裁剪，再把所有裁剪图交给 decoder。
+拍照场景对色准、白平衡和显示器色彩表现比黑白 QR 更敏感，建议先做小文件实测。
 
 ### 解码端（外网）—— 照片 → 文件
 
@@ -76,6 +99,8 @@ uv sync                            # 创建 .venv 并安装依赖
 ```bash
 ./run.sh decode photos_dir --backend pyzbar
 ```
+
+JAB Code 图片使用 `--backend jab`，并要求安装上述官方 reader。
 
 ### 传输方式与 chunk-size 选择
 
@@ -117,9 +142,13 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 |------|--------|------|
 | `input` | - | 要传输的输入文件（任意文件） |
 | `-o` | `output/qr-{chunk_size}-{时间戳}.html` | 输出 HTML 文件 |
-| `--cols` | `6` | 每行二维码数量 |
-| `--qr-size` | `180` | 二维码尺寸（像素） |
-| `--chunk-size` | `800` | 每片数据字节数 |
+| `--cols` | QR `6` / JAB `1` | 每行码数量 |
+| `--qr-size` | QR `180` / JAB `900` | HTML 中码图尺寸（像素） |
+| `--chunk-size` | QR `800` / JAB `3000` | 每片数据字节数 |
+| `--backend` | `qr` | 码制：`qr` 或 `jab` |
+| `--jab-colors` | `8` | JAB Code 颜色数：4 或 8 |
+| `--jab-module-size` | `12` | JAB Code 模块像素数 |
+| `--jab-ecc-level` | `3` | JAB Code 纠错级别 1-10 |
 | `--no-open` | - | 生成后不自动打开浏览器 |
 
 ### decoder.py
@@ -127,7 +156,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 |------|--------|------|
 | `images` | - | 照片文件或目录（可多个） |
 | `-o` | 元数据中的 filename，找不到时为 `restored.out` | 显式传任意值都按字面写入，不再读元数据 |
-| `--backend` | `zxing` | 识别后端：`zxing`（纯 wheel）或 `pyzbar`（需 zbar 系统库） |
+| `--backend` | `zxing` | `zxing` / `pyzbar`（QR）或 `jab`（JAB Code） |
 | `--debug` | - | 显示调试信息 |
 
 ### make_diff.py（可选）
@@ -156,6 +185,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 ./run.sh verify      # verify_full.py —— 真·渲染+pyzbar 解码往返
 uv run python test_make_diff.py       # make_diff 目录对比
 uv run python test_cli.py             # CLI 子进程冒烟测试；含 pyzbar 用例，需可用 zbar
+uv run python test_jab_backend.py     # JAB CLI 适配层测试（用模拟原生工具）
 ```
 
 ## 扩展：新增二维码解码后端

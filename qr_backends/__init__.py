@@ -10,11 +10,13 @@
 from .base import QRDecoderAdapter, QRDecodeResult
 from .pyzbar_backend import PyzbarQRDecoder
 from .zxing_backend import ZxingQRDecoder
+from .jab_backend import JabCodeDecoder
 
 
 _REGISTRY = {
     ZxingQRDecoder.name: ZxingQRDecoder,
     PyzbarQRDecoder.name: PyzbarQRDecoder,
+    JabCodeDecoder.name: JabCodeDecoder,
 }
 
 DEFAULT_BACKEND = ZxingQRDecoder.name
@@ -39,6 +41,7 @@ __all__ = [
     'QRDecodeResult',
     'PyzbarQRDecoder',
     'ZxingQRDecoder',
+    'JabCodeDecoder',
     'DEFAULT_BACKEND',
     'available_backends',
     'get_backend',
