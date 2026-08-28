@@ -10,12 +10,14 @@ The project's scope is **only the QR transfer** — it does not care how the inp
 
 ## Commands
 
-Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows CMD). Dependencies are declared in **`pyproject.toml`** and managed by [uv](https://docs.astral.sh/uv/); the run scripts auto-create `.venv` and `uv sync` on first run, then dispatch via `uv run`. There is no `requirements.txt` (uv pins exact versions in `uv.lock`). The scripts still install the native zbar lib (brew/apt/yum), which uv cannot manage.
+Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows CMD). Dependencies are declared in **`pyproject.toml`** and managed by [uv](https://docs.astral.sh/uv/); the run scripts auto-create `.venv` and `uv sync` on first run, then dispatch via `uv run`. There is no `requirements.txt` (uv pins exact versions in `uv.lock`). Native libraries are outside uv's reach: the scripts install the zbar lib (brew/apt/yum) for pyzbar, and the JAB Code tools must be built by hand (see the jab backend below).
 
 ```bash
 ./run.sh encode <file> -o qr.html              # any file → QR HTML
+./run.sh encode <file> -o jab.html --backend jab  # JAB Code (color) instead of QR
 ./run.sh decode photo1.jpg photo2.jpg -o out   # zxing-cpp decoder (default, no native lib)
 ./run.sh decode photos -o out --backend pyzbar # opt-in pyzbar (needs system zbar)
+./run.sh decode jab.png -o out --backend jab   # JAB Code (needs native jabcodeReader)
 ./run.sh diff <base-dir> <target-dir> -o d.patch  # OPTIONAL: dir diff → patch file
 ./run.sh test                                  # → test_roundtrip.py (byte roundtrip)
 ./run.sh verify                                # → verify_full.py (real QR via pyzbar)
@@ -25,10 +27,14 @@ Direct invocation (via `uv run`, which auto-syncs deps; or `python` after `sourc
 
 ```bash
 uv run python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
-uv run python decoder.py <images-or-dirs...> -o out [--backend zxing|pyzbar] [--debug]
+                                           [--backend qr|jab] [--jab-colors 4|8]
+                                           [--jab-module-size N] [--jab-ecc-level 1..10]
+uv run python decoder.py <images-or-dirs...> -o out [--backend zxing|pyzbar|jab] [--debug]
 uv run python decode_pyzbar.py [image_dir=bid] [out=restored.out] # legacy pyzbar path, scans PNGs in a DIR
 uv run python make_diff.py <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
 ```
+
+**`--backend` means different things on the two sides, and the value spaces do not overlap.** On `encoder.py` it selects the *symbology* and is a hard-coded `('qr', 'jab')` choice — it does **not** consult the `qr_backends` registry. On `decoder.py` it selects the *decode implementation* and comes from `available_backends()` (`zxing` / `pyzbar` / `jab`). So `--backend qr` is an encode-only value and `--backend zxing` is a decode-only value; only `jab` is valid on both sides.
 
 ### Tests
 
@@ -36,7 +42,8 @@ Tests are **plain assert-based scripts, not pytest** — there is no per-test se
 
 - `test_roundtrip.py` — byte-roundtrip of the pipeline (arbitrary bytes → `encode_chunks` → HTML → simulated base85 decode → bytes). No diff or image deps. This is `run.sh test`.
 - `verify_full.py` / `test_qr_roundtrip.py` — render **real** QR PNGs and read them back with **pyzbar**, asserting byte-identical output. Self-contained: they encode an in-memory byte blob (no external fixtures). `run.sh verify` runs `verify_full.py`. (Run directly with `DYLD_LIBRARY_PATH=/opt/homebrew/lib` set so pyzbar finds libzbar.)
-- `test_make_diff.py` — directory-comparison logic for `make_diff.py`. `test_cli.py` — subprocess smoke tests for the three CLIs. (Neither is wired into `run.sh`; run with `uv run python`.)
+- `test_make_diff.py` — directory-comparison logic for `make_diff.py`. `test_cli.py` — subprocess smoke tests for the three CLIs. (Neither is wired into `run.sh`; run with `uv run python`.) `test_cli.py` contains a pyzbar case that spawns `decoder.py` via `subprocess` **without inheriting `run.sh`'s environment**, so on macOS run it as `DYLD_LIBRARY_PATH=/opt/homebrew/lib uv run python test_cli.py` — otherwise that case exits 1 with an *empty* stderr, because the "pyzbar backend is unavailable" hint goes to stdout.
+- `test_jab_backend.py` — the JAB Code CLI bridge, **without needing the native tools**: it writes throwaway Python scripts that impersonate `jabcodeWriter`/`jabcodeReader` and points `QUEQIAO_JAB_WRITER`/`QUEQIAO_JAB_READER` at them. Also covers the `payload_encoding='raw'` chunk roundtrip. Not wired into `run.sh`; run with `uv run python test_jab_backend.py`.
 
 ## Architecture
 
@@ -45,20 +52,27 @@ Tests are **plain assert-based scripts, not pytest** — there is no per-test se
 ```
 encoder.py:  read_bytes(input file) → lzma(xz, preset 9|EXTREME) → split into chunks
              → build metadata JSON chunk (index 0) + data chunks (1..N)
-             → prepend 12-byte header w/ checksum → base85 → qrcode → HTML grid
-decoder.py:  photo(s)/dir(s) → QR backend (zxing-cpp default, pyzbar optional)
-             → base85 decode → parse header / verify
+             → prepend 12-byte header w/ checksum → base85 (QR) | raw bytes (JAB)
+             → qrcode | jabcodeWriter → HTML grid
+decoder.py:  photo(s)/dir(s) → decode backend (zxing-cpp default, pyzbar/jab optional)
+             → base85 decode (or raw passthrough) → parse header / verify
              → extract metadata from index 0 → reassemble data chunks (1..N)
              → lzma decompress → verify whole-file SHA256 → write raw bytes
 ```
 
-base85 is used for the **QR payload** (denser than base64); base64 is used separately only to inline PNGs into the HTML.
+**The transport encoding of the chunk is a per-backend property, not a pipeline constant.** For QR the chunk bytes go through base85 (denser than base64); for JAB Code the chunk bytes are written **raw**, skipping base85's ~25% inflation entirely. The decode side keys off `adapter.payload_encoding` (`'base85'` default on `QRDecoderAdapter`, `'raw'` on `JabCodeDecoder`), which `decoder.py` passes into `decode_and_merge_chunks()`. base64 is used separately, on both paths, only to inline the PNGs into the HTML.
+
+The 12-byte header itself is **identical on both paths** — only the layer that carries it differs.
 
 The pipeline is **byte-agnostic**: the encoder reads raw bytes and the decoder writes raw bytes (no utf-8 encode/decode), so a text file in yields a byte-identical text file out, and binaries work too.
 
 ### chunk-size is transport-dependent (the default is deliberately conservative)
 
 QR count = ceil(compressed_size / chunk-size). The default `--chunk-size 800` balances density and reliability for most transfers. For **screenshot** transfer (pixel-perfect, lossless) you can go much larger — up to ~1800, where a single QR hits version 40 (the max; a chunk-size of ~2000+ raises a v41 error). Pair large chunks with a bigger `--qr-size` (>= the QR's native pixel size) or the screenshot's downsampling blurs the dense modules and decoding fails. Measured on a ~487KB text file: 235 codes (chunk-size 400) vs 53 codes (`chunk-size 1800`).
+
+**Three encoder defaults are resolved *after* `--backend` is parsed, so they differ per symbology** (`encoder.py` leaves them unset and fills them in): `--chunk-size` 800 → 3000, `--cols` 6 → 1, `--qr-size` 180 → 900 when `--backend jab`. Passing any of them explicitly wins over the backend default.
+
+JAB Code's ceiling is higher because raw payloads skip base85 and color multiplies the bits per module. A single basic symbol runs Version 1..32 with side length `4 × version + 17` modules, i.e. up to `145 × 145`. At 8 colors / ECC level 3, Version 32 holds roughly **4245 bytes**, so minus the 12-byte header the practical max is `--chunk-size ~4233`; on a 1080-pixel-tall screen the largest integer module size is `floor(1080 / 145) = 7`. For pixel-perfect screenshots, `--chunk-size 4000 --jab-module-size 7` is the near-ceiling setting; go conservative for camera shots. See `jabcode-chat-record.md` for the full derivation.
 
 ### The chunk binary format is the load-bearing contract
 
@@ -69,7 +83,7 @@ Every chunk is `MAGIC(2) | index(2,>H) | total(2,>H) | datalen(2,>H) | checksum(
 - `decode_pyzbar.py` → `decode_single_chunk()`
 - `test_roundtrip.py`, `test_qr_roundtrip.py`, `verify_full.py` (inline parsers)
 
-**If you change the header layout, magic, checksum, or struct format, you must update all of these in lockstep.** `make_diff.py` does **not** touch the wire format and is not part of this set.
+**If you change the header layout, magic, checksum, or struct format, you must update all of these in lockstep.** `make_diff.py` does **not** touch the wire format and is not part of this set. Neither is `test_jab_backend.py` — it imports `decoder.decode_single_chunk` rather than reimplementing the parser, so the count stays at six.
 
 **Chunk index 0 is a metadata chunk** whose payload is compact JSON:
 `{"version":1,"filename":"input.txt","size":12345,"sha256":"abcdef...","compressed_size":5678}`
@@ -77,19 +91,24 @@ Data chunks occupy indices 1..N. The `total` field in every header = N+1 (metada
 
 ### Reassembly is order-independent by design
 
-The `index`/`total` fields in the header — not image position — drive reconstruction. Decoders dedupe by index, drop chunks failing the SHA256 check, and abort listing any missing indices. Consequence: `decoder.py`'s `sort_qr_by_position()` is essentially cosmetic, and `decode_pyzbar.py` skips sorting entirely. Multi-photo decode works by concatenating all detected QRs across all images into one pool.
+The `index`/`total` fields in the header — not image position — drive reconstruction. Decoders dedupe by index, drop chunks failing the SHA256 check, and abort listing any missing indices. Consequence: `decoder.py`'s `sort_qr_by_position()` is essentially cosmetic, and `decode_pyzbar.py` skips sorting entirely. Multi-photo decode works by concatenating all detected codes across all images into one pool.
+
+This is also what makes the jab backend workable despite its one-code-per-image reader: N cropped single-code PNGs pool into the same index-keyed reassembly as one photo containing N QR codes.
 
 ### Decoder backends live in `qr_backends/`
 
 Backends are pluggable. Each is one module that subclasses `qr_backends.base.QRDecoderAdapter` and implements `decode_image(path) -> list[QRDecodeResult]`. Registration is explicit in `qr_backends/__init__.py` — the dict order defines `available_backends()` order, and `DEFAULT_BACKEND` is the CLI default. `decoder.py` only talks to the registry (`get_backend(name)`); it does not know which backends exist.
 
-To add a new backend: write `qr_backends/<name>_backend.py`, then import + register it in `qr_backends/__init__.py`. The CLI's `--backend` choices update automatically.
+The adapter contract has **two** class attributes, not one: `name` (the `--backend` identifier) and `payload_encoding` (`'base85'` by default, `'raw'` for symbologies that carry bytes directly). A backend that returns raw chunk bytes **must** override `payload_encoding` or the header parse will fail on garbage. Missing third-party/native deps should be raised as `RuntimeError` from `__init__` so the CLI can print an install hint.
+
+To add a new backend: write `qr_backends/<name>_backend.py`, then import + register it in `qr_backends/__init__.py`. The decoder CLI's `--backend` choices update automatically. **Encoding is not symmetric** — adding an encode-side symbology means touching `encoder.py`'s hard-coded `--backend` choices and `generate_html()` branch as well.
 
 Currently shipped:
 - **zxing** (`--backend zxing`, **default**): pure-wheel C++ port of ZXing (`pip install zxing-cpp`) — **no native system library to install**. Reads PIL images directly and exposes raw payload bytes via `barcode.bytes` (no utf-8 round-trip), and gives a 4-corner `position` we map to a bounding box. On pixel-perfect screenshot transfer (queqiao's primary use case) it is ~10–14× faster than pyzbar at 100% accuracy across chunk-sizes 800/1500/1800; on degraded photos (downsample + Gaussian blur + JPEG) the crash threshold is the same as pyzbar — neither offers a robustness edge on dense v40-class codes once downsampling drops below ~30% with blur. See `bench_backends.py` for the reproducible benchmark.
 - **pyzbar** (`--backend pyzbar`): opt-in legacy backend that wraps the **native zbar library** (`brew install zbar`; macOS also needs `DYLD_LIBRARY_PATH=/opt/homebrew/lib`, which `run.sh` sets). Kept as a fallback for specific samples where zxing fails to detect — currently no such samples are documented.
+- **jab** (`--backend jab`, `payload_encoding='raw'`): color barcode (JAB Code) for much denser transfer. This backend is a **subprocess bridge to the official reference CLI**, not a library — `jabcode_cli.py` shells out to `jabcodeWriter` (encode) and `jabcodeReader` (decode). Those binaries are **not** Python packages and `uv sync` will not provide them: build them from <https://github.com/jabcode/jabcode> and put them on `PATH`, or point `QUEQIAO_JAB_WRITER` / `QUEQIAO_JAB_READER` at them. Two constraints follow from the reference reader: it accepts PNG/TIFF only (the backend normalizes camera formats to PNG in a temp dir first), and **it decodes exactly one JAB Code per image** — so `decode_image()` always returns 0 or 1 results, and a full-page screenshot of many codes must be cropped into per-code images before decoding. That is why the encoder defaults to `--cols 1` for jab.
 
-Switch to pyzbar only when you have a concrete sample that zxing cannot decode.
+Switch to pyzbar only when you have a concrete sample that zxing cannot decode. Reach for jab when you need the density and can afford building the native tools plus the per-code cropping step.
 
 ### Directory comparison gotchas (`make_diff.py`)
 
