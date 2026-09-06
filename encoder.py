@@ -83,20 +83,40 @@ def encode_chunks(data, chunk_size=400, filename=None):
 # 3. 生成 HTML 页面
 # ──────────────────────────────────────────────────────────────
 
-def chunk_to_qr_image(payload, box_size=5, border=2):
-    """将分片数据编码为二维码图片"""
+_ECC_LEVELS = {
+    'L': qrcode.constants.ERROR_CORRECT_L,
+    'M': qrcode.constants.ERROR_CORRECT_M,
+    'Q': qrcode.constants.ERROR_CORRECT_Q,
+    'H': qrcode.constants.ERROR_CORRECT_H,
+}
+
+
+def chunk_to_qr_image(payload, box_size=5, border=2, ecc=None):
+    """将分片数据编码为二维码图片。
+
+    ecc=None 时用 ERROR_CORRECT_M，与本函数历史行为逐字节相同；
+    v3 流式路径的标定会显式传 'L'/'M'/'Q'/'H'。
+    """
     # 用 base85 编码（比 base64 更紧凑）
     b85 = base64.b85encode(payload).decode('ascii')
-    
+
+    if ecc is None:
+        error_correction = qrcode.constants.ERROR_CORRECT_M
+    else:
+        try:
+            error_correction = _ECC_LEVELS[ecc]
+        except (KeyError, TypeError):
+            raise ValueError("ecc 必须是 'L'/'M'/'Q'/'H' 之一，实得 %r" % (ecc,))
+
     qr = qrcode.QRCode(
         version=None,  # 自动选择最小版本
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        error_correction=error_correction,
         box_size=box_size,
         border=border,
     )
     qr.add_data(b85)
     qr.make(fit=True)
-    
+
     return qr.make_image(fill_color="black", back_color="white")
 
 
