@@ -7,6 +7,8 @@ randint/sample 内部算法在版本间不保证不变，而发送端和接收�
 编解码两端共用，跨 Python 版本、跨 Windows/macOS 完全确定。
 """
 
+from decimal import Decimal, getcontext, ROUND_HALF_EVEN
+
 MASK64 = (1 << 64) - 1
 
 
@@ -37,3 +39,113 @@ def unbiased_below(state, n):
         state, x = splitmix64_next(state)
         if x < limit:
             return state, x % n
+
+
+# ──────────────────────────────────────────────────────────────
+# 度分布：K >= LT_MIN_K 用 Robust Soliton，K < LT_MIN_K 走纯系统性循环
+# ──────────────────────────────────────────────────────────────
+
+# K <= 9 时 Robust Soliton 的 tau 尖峰 floor(K/R) 落在源块数之外
+# （K=1 尖峰在第 14 块、K=5 在第 9 块、K=9 在第 10 块），度分布无意义。
+# K=10 时 floor(K/R)=10 恰好相等，是可用的最小值。
+LT_MIN_K = 10
+
+# 写死，不可配置，两端必须一致（规格 §6.5）
+SOLITON_C = Decimal('0.1')
+SOLITON_DELTA = Decimal('0.5')
+
+# decimal 上下文：libmpdec 实现 IEEE 754-2008，跨平台位精确。
+# 用它算 CDF 再量化到 2^32 整数阈值，消除"浮点差 1 ulp 导致两端落到不同度"的风险。
+_DECIMAL_PREC = 50
+
+
+class DegreeTable:
+    """给定 K 的 Robust Soliton 量化阈值表。K 固定，启动时算一次。
+
+    PMF（写死，不可配置）：
+        R    = c·sqrt(K)·ln(K/delta)             c=0.1, delta=0.5
+        rho(1) = 1/K
+        rho(i) = 1/(i·(i-1))                     i = 2..K
+        tau(i) = R/(i·K)                         i = 1..floor(K/R)-1
+        tau(floor(K/R)) = R·ln(R/delta)/K
+        tau(i) = 0                               i > floor(K/R)
+        beta   = sum_i(rho(i)+tau(i))
+        mu(i)  = (rho(i)+tau(i))/beta
+    """
+
+    __slots__ = ('K', 'R', 'spike', 'thresholds')
+
+    def __init__(self, K):
+        if K < LT_MIN_K:
+            raise ValueError(
+                "DegreeTable 要求 K >= %d；K=%d 的 tau 尖峰落在源块数之外，"
+                "这一档应走纯系统性循环（见 fountain.round_permutation）" % (LT_MIN_K, K)
+            )
+        ctx = getcontext()
+        old_prec, old_round = ctx.prec, ctx.rounding
+        ctx.prec = _DECIMAL_PREC
+        ctx.rounding = ROUND_HALF_EVEN
+        try:
+            Kd = Decimal(K)
+            R = SOLITON_C * Kd.sqrt() * (Kd / SOLITON_DELTA).ln()
+            spike = int(Kd / R)                       # floor(K/R)
+
+            rho = {1: Decimal(1) / Kd}
+            for i in range(2, K + 1):
+                rho[i] = Decimal(1) / (Decimal(i) * Decimal(i - 1))
+
+            tau = {}
+            for i in range(1, K + 1):
+                if i < spike:
+                    tau[i] = R / (Decimal(i) * Kd)
+                elif i == spike:
+                    tau[i] = R * (R / SOLITON_DELTA).ln() / Kd
+                else:
+                    tau[i] = Decimal(0)
+
+            beta = sum(rho[i] + tau[i] for i in range(1, K + 1))
+
+            thresholds = [0] * (K + 1)                # 1-based，[0] 是占位
+            acc = Decimal(0)
+            for i in range(1, K + 1):                 # CDF 累加顺序：i 从 1 到 K
+                acc += (rho[i] + tau[i]) / beta
+                thresholds[i] = int((acc * (1 << 32)).to_integral_value())
+            thresholds[K] = 1 << 32                   # 收尾，兜住边界
+        finally:
+            ctx.prec, ctx.rounding = old_prec, old_round
+
+        self.K = K
+        self.R = R
+        self.spike = spike
+        self.thresholds = thresholds
+
+
+def sample_degree(state, table):
+    """只在 seed >= K 的 LT 包上调用。返回 (新 state, 度 d)。"""
+    state, r = splitmix64_next(state)
+    u32 = r >> 32                                  # 取高 32 位
+    thresholds = table.thresholds
+    for i in range(1, table.K + 1):                # CDF 从 i=1 累加向上
+        if u32 < thresholds[i]:                    # 边界：严格小于，取第一个满足的 i
+            return state, i                        # i 天然 <= K，无需再截断
+    return state, table.K                          # 理论不可达（T[K] = 2^32 > 任意 u32）
+
+
+def sample_indices(state, d, K):
+    """Floyd 无放回抽样：取 d 个 [0, K) 内两两不同的索引。"""
+    chosen = set()
+    result = []
+    for j in range(K - d, K):
+        state, t = unbiased_below(state, j + 1)    # t 属于 [0, j]
+        v = t if t not in chosen else j
+        chosen.add(v)
+        result.append(v)
+    return state, result
+
+
+def lt_indices(seed, table):
+    """一个 LT 包参与 XOR 的源块索引集合。data = XOR(源块[i] for i in 返回值)。"""
+    state = seed & MASK64
+    state, d = sample_degree(state, table)
+    state, idxs = sample_indices(state, d, table.K)
+    return idxs

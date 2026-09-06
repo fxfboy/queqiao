@@ -10,7 +10,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fountain import MASK64, splitmix64_next, unbiased_below
+from fountain import (
+    MASK64, splitmix64_next, unbiased_below,
+    LT_MIN_K, DegreeTable, sample_degree, sample_indices, lt_indices,
+)
 
 
 def test_splitmix64_reference_vectors():
@@ -116,10 +119,121 @@ def test_unbiased_below_rejection_consumes_state():
     print("  ✅ PASSED")
 
 
+def test_degree_table_reference_values():
+    print("[TEST] DegreeTable R 值与尖峰位置...")
+    # R 的定点参考值：floor(R * 2^20)。用定点比对而不是浮点相等，
+    # 既能钉死数值又不受 Decimal repr 影响。
+    cases = {
+        10: (993351, 10),        # (floor(R*2^20), spike=floor(K/R))
+        100: (5555688, 18),
+        1000: (25203744, 41),
+    }
+    for K, (want_fixed, want_spike) in cases.items():
+        t = DegreeTable(K)
+        got_fixed = int(t.R * (1 << 20))
+        assert got_fixed == want_fixed, \
+            "K=%d 的 floor(R*2^20) 应为 %d，实得 %d" % (K, want_fixed, got_fixed)
+        assert t.spike == want_spike, \
+            "K=%d 的 spike 应为 %d，实得 %d" % (K, want_spike, t.spike)
+    print("  ✅ PASSED")
+
+
+def test_degree_table_thresholds():
+    print("[TEST] DegreeTable 量化阈值表...")
+    cases = {
+        10: [629544998, 2399102804, 3039998635],
+        100: [206922051, 1936633538, 2542215452],
+        1000: [89913269, 1928742066, 2556071987],
+    }
+    for K, want_head in cases.items():
+        t = DegreeTable(K)
+        assert len(t.thresholds) == K + 1, "thresholds 是 1-based，长度应为 K+1"
+        assert t.thresholds[0] == 0, "thresholds[0] 是占位，恒为 0"
+        for i, want in enumerate(want_head, start=1):
+            assert t.thresholds[i] == want, \
+                "K=%d 的 T[%d] 应为 %d，实得 %d" % (K, i, want, t.thresholds[i])
+        # 收尾必须强制到 2^32，兜住浮点边界
+        assert t.thresholds[K] == (1 << 32), \
+            "K=%d 的 T[K] 必须强制等于 2^32，实得 %d" % (K, t.thresholds[K])
+        # CDF 必须单调不减
+        for i in range(1, K):
+            assert t.thresholds[i] <= t.thresholds[i + 1], "CDF 必须单调不减"
+    print("  ✅ PASSED")
+
+
+def test_degree_table_rejects_small_k():
+    print("[TEST] DegreeTable 拒绝 K < LT_MIN_K...")
+    # K <= 9 时 tau 尖峰 floor(K/R) 落在源块数之外（K=1 尖峰在第 14 块，
+    # K=9 在第 10 块），度分布无意义。这一档走纯系统性循环，不建表。
+    assert LT_MIN_K == 10
+    for K in (1, 2, 5, 9):
+        try:
+            DegreeTable(K)
+        except ValueError:
+            continue
+        raise AssertionError("K=%d 应当拒绝建表（尖峰越界）" % K)
+    print("  ✅ PASSED")
+
+
+def test_lt_indices_reference_vectors():
+    print("[TEST] lt_indices reference vectors...")
+    # 这是跨平台一致性的核心断言：同一个 (K, seed) 必须推出同一组索引。
+    cases = [
+        (10, 10, 1, [4]),
+        (10, 11, 2, [4, 9]),
+        (10, 17, 2, [1, 6]),
+        (10, 1000000, 2, [3, 6]),
+        (100, 100, 2, [36, 77]),
+        (100, 101, 11, [71, 37, 3, 91, 93, 24, 43, 96, 8, 39, 7]),
+        (100, 107, 2, [79, 28]),
+        (100, 1000000, 2, [30, 96]),
+        (1000, 1000, 2, [997, 121]),
+        (1000, 1001, 2, [727, 297]),
+        (1000, 1000000, 2, [210, 696]),
+    ]
+    tables = {K: DegreeTable(K) for K in (10, 100, 1000)}
+    for K, seed, want_d, want_idxs in cases:
+        idxs = lt_indices(seed, tables[K])
+        assert len(idxs) == want_d, \
+            "K=%d seed=%d 的度应为 %d，实得 %d" % (K, seed, want_d, len(idxs))
+        assert idxs == want_idxs, \
+            "K=%d seed=%d 的索引应为 %r，实得 %r" % (K, seed, want_idxs, idxs)
+    print("  ✅ PASSED")
+
+
+def test_sample_indices_no_duplicates():
+    print("[TEST] sample_indices 无放回、值域正确...")
+    K = 100
+    state = 7
+    for d in (1, 2, 5, 50, 99, 100):
+        state, idxs = sample_indices(state, d, K)
+        assert len(idxs) == d, "应取到 %d 个索引，实得 %d" % (d, len(idxs))
+        assert len(set(idxs)) == d, "索引必须两两不同（Floyd 无放回）"
+        assert all(0 <= i < K for i in idxs), "索引必须落在 [0, K)"
+    print("  ✅ PASSED")
+
+
+def test_sample_degree_bounds():
+    print("[TEST] sample_degree 度恒落在 [1, K]...")
+    for K in (10, 100, 1000):
+        table = DegreeTable(K)
+        state = 3
+        for _ in range(5000):
+            state, d = sample_degree(state, table)
+            assert 1 <= d <= K, "K=%d 的度 %d 越界" % (K, d)
+    print("  ✅ PASSED")
+
+
 if __name__ == '__main__':
     test_splitmix64_reference_vectors()
     test_unbiased_below_convention_n1()
     test_unbiased_below_reference_vectors()
     test_unbiased_below_range_and_no_modulo_bias()
     test_unbiased_below_rejection_consumes_state()
+    test_degree_table_reference_values()
+    test_degree_table_thresholds()
+    test_degree_table_rejects_small_k()
+    test_lt_indices_reference_vectors()
+    test_sample_indices_no_duplicates()
+    test_sample_degree_bounds()
     print("\n✅ All fountain PRNG tests passed!")
