@@ -15,7 +15,11 @@ import stream_packet
 from stream_packet import (
     MAGIC, HEADER_SIZE, MAX_BLOCKLEN, MAX_TOTAL_PAYLOAD,
     PacketError, StreamPacket, pack_packet, unpack_packet, peek_magic,
+    PAYLOAD_VERSION, PayloadError, serialize_meta, derive_nonce,
+    build_payload, split_blocks, parse_payload, safe_output_name,
 )
+import json
+import lzma
 
 
 def test_pack_roundtrip():
@@ -210,6 +214,191 @@ def test_peek_magic():
     print("  ✅ PASSED")
 
 
+def test_meta_serialization_is_byte_deterministic():
+    print("[TEST] meta_json 序列化字节确定（续传语义依赖它）...")
+    meta = {"version": 3, "filename": "a.txt", "size": 5,
+            "sha256": "0" * 64, "compressed_size": 60}
+    shuffled = {"sha256": "0" * 64, "size": 5, "filename": "a.txt",
+                "compressed_size": 60, "version": 3}
+    assert serialize_meta(meta) == serialize_meta(shuffled), \
+        "字段赋值顺序不同必须产出相同字节（sort_keys=True 的作用）"
+    blob = serialize_meta(meta)
+    assert b', ' not in blob and b': ' not in blob, \
+        "必须用紧凑 separators=(',',':')，5 字段省 9 字节"
+    # 非 ASCII 文件名必须转义成确定的 \uXXXX
+    cn = serialize_meta({"version": 3, "filename": "报告.txt", "size": 1,
+                         "sha256": "0" * 64, "compressed_size": 1})
+    assert all(b < 128 for b in cn), "ensure_ascii=True 应让输出全 ASCII"
+    assert json.loads(cn.decode('ascii'))['filename'] == "报告.txt"
+    print("  ✅ PASSED")
+
+
+def test_nonce_is_content_derived():
+    print("[TEST] nonce 内容派生：同文件同 nonce，异文件几乎必异...")
+    a = serialize_meta({"version": 3, "filename": "a.txt", "size": 1,
+                        "sha256": "0" * 64, "compressed_size": 1})
+    b = serialize_meta({"version": 3, "filename": "b.txt", "size": 1,
+                        "sha256": "1" * 64, "compressed_size": 1})
+    assert derive_nonce(a) == derive_nonce(a), "同一 meta_json 必须得出同一 nonce"
+    assert derive_nonce(a) != derive_nonce(b), "不同 meta 应得出不同 nonce"
+    assert 0 <= derive_nonce(a) <= 0xFFFF
+    expected = int.from_bytes(hashlib.sha256(a).digest()[:2], 'big')
+    assert derive_nonce(a) == expected, "nonce 必须是 sha256(meta_json)[:2] 大端"
+    print("  ✅ PASSED")
+
+
+def test_build_payload_supports_resume():
+    print("[TEST] 同一文件两次构建逐字节相同（中断续传的前提）...")
+    data = b"hello queqiao v3\n" * 100
+    p1, m1, n1 = build_payload("note.txt", data)
+    p2, m2, n2 = build_payload("note.txt", data)
+    assert p1 == p2 and m1 == m2 and n1 == n2, \
+        "同一文件重启发送端必须产出逐字节相同的 payload，否则续传失效"
+    print("  ✅ PASSED")
+
+
+def test_payload_roundtrip():
+    print("[TEST] payload 构建 → 切块 → 拼回 → 解析 往返...")
+    for filename, data in [
+        ("note.txt", b"hello queqiao v3\n" * 100),
+        ("empty.bin", b""),
+        ("bin.dat", bytes(range(256)) * 40),
+        ("报告.txt", "中文内容测试\n".encode('utf-8') * 50),
+    ]:
+        payload, meta_json, nonce = build_payload(filename, data)
+        for blocklen in (64, 800, 1800):
+            blocks = split_blocks(payload, blocklen)
+            K = len(blocks)
+            assert all(len(b) == blocklen for b in blocks), "源块必须等长"
+            assert K == -(-len(payload) // blocklen), "K = ceil(len/blocklen)"
+            meta, restored = parse_payload(b''.join(blocks), K, blocklen)
+            assert restored == data, "%s @ blocklen=%d 必须逐字节还原" % (filename, blocklen)
+            assert meta['filename'] == filename
+            assert meta['version'] == PAYLOAD_VERSION == 3
+            assert meta['size'] == len(data)
+    print("  ✅ PASSED")
+
+
+def _corrupt_payload(mutate):
+    """构造一个 payload，用 mutate 改坏它，返回 (assembled, K, blocklen)。"""
+    payload, _, _ = build_payload("x.txt", b"payload for negative tests" * 20)
+    payload = mutate(bytearray(payload))
+    blocklen = 64
+    blocks = split_blocks(bytes(payload), blocklen)
+    return b''.join(blocks), len(blocks), blocklen
+
+
+def test_payload_checklist_negatives():
+    print("[TEST] §6.6 校验清单逐条负例...")
+
+    def expect(reason, assembled, K, blocklen):
+        try:
+            parse_payload(assembled, K, blocklen)
+        except PayloadError as e:
+            assert e.reason == reason, "应报 %s，实得 %s" % (reason, e.reason)
+            return
+        raise AssertionError("应当拒绝，reason=%s" % reason)
+
+    # meta_len 越界
+    def blow_meta_len(buf):
+        buf[0:4] = struct.pack('>I', 10 ** 6)
+        return buf
+    expect('meta_len', *_corrupt_payload(blow_meta_len))
+
+    # meta_json 不是合法 UTF-8
+    def break_utf8(buf):
+        meta_len = struct.unpack('>I', bytes(buf[:4]))[0]
+        buf[4:4 + meta_len] = b'\xff' * meta_len
+        return buf
+    expect('meta_utf8', *_corrupt_payload(break_utf8))
+
+    # meta_json 不是合法 JSON
+    def break_json(buf):
+        meta_len = struct.unpack('>I', bytes(buf[:4]))[0]
+        buf[4:4 + meta_len] = b'{' + b' ' * (meta_len - 1)
+        return buf
+    expect('meta_json', *_corrupt_payload(break_json))
+
+    # 手工拼一个 payload，逐条打这些校验
+    def make(meta_obj, compressed, pad_tail=b''):
+        meta_json = json.dumps(meta_obj, ensure_ascii=True,
+                               separators=(',', ':'), sort_keys=True).encode('utf-8')
+        body = struct.pack('>I', len(meta_json)) + meta_json + compressed + pad_tail
+        blocklen = 64
+        blocks = split_blocks(body, blocklen)
+        return b''.join(blocks), len(blocks), blocklen
+
+    raw = b"content" * 30
+    good_meta = {
+        "version": 3, "filename": "x.txt", "size": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "compressed_size": 0,
+    }
+    comp = lzma.compress(raw, format=lzma.FORMAT_XZ, preset=9 | lzma.PRESET_EXTREME)
+    good_meta["compressed_size"] = len(comp)
+
+    # version 不是 3
+    m = dict(good_meta, version=2)
+    expect('version', *make(m, comp))
+
+    # sha256 格式不合规（大写 / 长度不对 / 非十六进制）
+    for bad in ("A" * 64, "0" * 63, "z" * 64, 12345):
+        m = dict(good_meta, sha256=bad)
+        expect('meta_fields', *make(m, comp))
+
+    # size / compressed_size 是负数或非整数
+    for field, bad in (("size", -1), ("size", "5"), ("compressed_size", -1)):
+        m = dict(good_meta)
+        m[field] = bad
+        expect('meta_fields', *make(m, comp))
+
+    # filename 不是字符串
+    expect('meta_fields', *make(dict(good_meta, filename=123), comp))
+
+    # NaN / Infinity 必须被拒（json.loads 默认接受）
+    meta_json = (b'{"compressed_size":NaN,"filename":"x.txt","sha256":"'
+                 + good_meta["sha256"].encode() + b'","size":1,"version":3}')
+    body = struct.pack('>I', len(meta_json)) + meta_json + comp
+    blocks = split_blocks(body, 64)
+    expect('meta_fields', b''.join(blocks), len(blocks), 64)
+
+    # compressed_size 超出可用空间
+    expect('compressed_size', *make(dict(good_meta, compressed_size=10 ** 6), comp))
+
+    # 尾部填充非零
+    def nonzero_tail(args):
+        assembled, K, blocklen = args
+        buf = bytearray(assembled)
+        buf[-1] = 0xFF
+        return bytes(buf), K, blocklen
+    expect('padding', *nonzero_tail(make(good_meta, comp, pad_tail=b'\x00' * 8)))
+
+    # lzma 解压失败 —— 必须报错、绝不把压缩数据当明文写出去
+    expect('lzma', *make(dict(good_meta, compressed_size=16), b'\x00' * 16))
+
+    # 解压后长度对不上
+    expect('size', *make(dict(good_meta, size=len(raw) + 1), comp))
+
+    # 解压后 SHA256 对不上
+    expect('sha256', *make(dict(good_meta, sha256="0" * 64), comp))
+    print("  ✅ PASSED")
+
+
+def test_safe_output_name():
+    print("[TEST] filename 路径穿越与非法字符...")
+    assert safe_output_name("a.txt") == "a.txt"
+    assert safe_output_name("../../etc/passwd") == "passwd"
+    assert safe_output_name("/abs/path/x.bin") == "x.bin"
+    assert safe_output_name("dir\\win.txt") == "win.txt"
+    assert safe_output_name("报告.txt") == "报告.txt"
+    for evil in ("", ".", "..", "/", "\\", "   "):
+        out = safe_output_name(evil)
+        assert out and out not in (".", ".."), \
+            "%r 应回落到安全默认名，实得 %r" % (evil, out)
+        assert '/' not in out and '\\' not in out
+    print("  ✅ PASSED")
+
+
 if __name__ == '__main__':
     test_pack_roundtrip()
     test_header_field_layout()
@@ -220,4 +409,10 @@ if __name__ == '__main__':
     test_rejects_out_of_range_header_before_allocating()
     test_pack_validates_inputs()
     test_peek_magic()
+    test_meta_serialization_is_byte_deterministic()
+    test_nonce_is_content_derived()
+    test_build_payload_supports_resume()
+    test_payload_roundtrip()
+    test_payload_checklist_negatives()
+    test_safe_output_name()
     print("\n✅ All stream packet tests passed!")

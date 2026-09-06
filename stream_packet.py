@@ -6,6 +6,10 @@ decode_pyzbar.py 和三个测试），改一次要同步六个文件。v3 只有
 """
 
 import hashlib
+import json
+import lzma
+import os
+import re
 import struct
 
 MAGIC = b'QF'
@@ -135,3 +139,156 @@ def unpack_packet(raw):
         raise PacketError('checksum', "checksum 不匹配（seed=%d）" % seed)
 
     return StreamPacket(nonce, seed, K, blocklen, data, checksum)
+
+
+# ──────────────────────────────────────────────────────────────
+# 载荷布局：payload = meta_len(4,>I) | meta_json | lzma_data
+# ──────────────────────────────────────────────────────────────
+
+PAYLOAD_VERSION = 3
+_SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
+_DEFAULT_OUTPUT_NAME = 'received.out'
+
+
+class PayloadError(Exception):
+    """载荷校验清单（§6.6）中的任一条不过。任一条不过都拒绝写文件。"""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def serialize_meta(meta):
+    """字节确定的 meta_json。
+
+    nonce 和续传语义都建立在它的字节确定性上。sort_keys=True 把
+    "依赖 dict 插入顺序"这个隐性依赖彻底消除——这是防演化，不是修当前 bug。
+    紧凑 separators 相对默认值省 9 字节（5 字段 = 4 逗号 + 5 冒号）。
+    """
+    return json.dumps(meta, ensure_ascii=True, separators=(',', ':'),
+                      sort_keys=True).encode('utf-8')
+
+
+def derive_nonce(meta_json):
+    """nonce = sha256(meta_json)[:2]，内容派生而非随机。
+
+    同一文件重启发送端 → nonce/K/blocklen 全相同、lzma 字节一致 →
+    两次的包可混用 = 天然支持中断续传。随机 nonce 反而把续传判成新会话。
+    """
+    return int.from_bytes(hashlib.sha256(meta_json).digest()[:2], 'big')
+
+
+def build_payload(filename, file_bytes):
+    """返回 (payload, meta_json, nonce)。payload 尚未补零填充。"""
+    compressed = lzma.compress(file_bytes, format=lzma.FORMAT_XZ,
+                               preset=9 | lzma.PRESET_EXTREME)
+    meta = {
+        'version': PAYLOAD_VERSION,
+        'filename': filename,
+        'size': len(file_bytes),
+        'sha256': hashlib.sha256(file_bytes).hexdigest(),
+        'compressed_size': len(compressed),
+    }
+    meta_json = serialize_meta(meta)
+    payload = struct.pack('>I', len(meta_json)) + meta_json + compressed
+    return payload, meta_json, derive_nonce(meta_json)
+
+
+def split_blocks(payload, blocklen):
+    """补零填充到 K x blocklen 再切成 K 个等长源块（XOR 要求各块等长）。"""
+    if blocklen < 1:
+        raise ValueError("blocklen 必须 >= 1")
+    K = max(1, -(-len(payload) // blocklen))       # ceil，空 payload 也至少 1 块
+    padded = payload.ljust(K * blocklen, b'\x00')
+    return [padded[i * blocklen:(i + 1) * blocklen] for i in range(K)]
+
+
+def _reject_constant(value):
+    raise PayloadError('meta_fields', "meta_json 含非法常量 %s" % value)
+
+
+def _validate_meta(meta):
+    if not isinstance(meta, dict):
+        raise PayloadError('meta_json', "meta_json 顶层必须是对象")
+    if meta.get('version') != PAYLOAD_VERSION:
+        raise PayloadError('version', "version 必须是 %d，实得 %r"
+                           % (PAYLOAD_VERSION, meta.get('version')))
+    if not isinstance(meta.get('filename'), str):
+        raise PayloadError('meta_fields', "filename 必须是字符串")
+    for field in ('size', 'compressed_size'):
+        v = meta.get(field)
+        # bool 是 int 的子类，必须显式排除
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            raise PayloadError('meta_fields', "%s 必须是非负整数，实得 %r" % (field, v))
+    sha = meta.get('sha256')
+    if not isinstance(sha, str) or not _SHA256_RE.match(sha):
+        raise PayloadError('meta_fields', "sha256 必须匹配 ^[0-9a-f]{64}$，实得 %r" % (sha,))
+
+
+def parse_payload(assembled, K, blocklen):
+    """走完整份 §6.6 校验清单。返回 (meta, file_bytes)。任一条不过抛 PayloadError。"""
+    total = K * blocklen
+    if len(assembled) != total:
+        raise PayloadError('length', "拼装长度必须等于 K x blocklen = %d，实得 %d"
+                           % (total, len(assembled)))
+    if total < 4:
+        raise PayloadError('meta_len', "载荷不足 4 字节的 meta_len 前缀")
+
+    meta_len = struct.unpack('>I', assembled[:4])[0]
+    if meta_len > total - 4:
+        raise PayloadError('meta_len', "meta_len %d 超出可用空间 %d"
+                           % (meta_len, total - 4))
+
+    meta_blob = assembled[4:4 + meta_len]
+    try:
+        meta_text = meta_blob.decode('utf-8')
+    except UnicodeDecodeError as e:
+        raise PayloadError('meta_utf8', "meta_json 不是合法 UTF-8") from e
+    try:
+        # json.loads 默认接受 NaN/Infinity/-Infinity，必须用钩子拒绝
+        meta = json.loads(meta_text, parse_constant=_reject_constant)
+    except PayloadError:
+        raise
+    except ValueError as e:
+        raise PayloadError('meta_json', "meta_json 不是合法 JSON: %s" % e) from e
+
+    _validate_meta(meta)
+
+    compressed_size = meta['compressed_size']
+    if compressed_size > total - 4 - meta_len:
+        raise PayloadError('compressed_size',
+                           "compressed_size %d 超出可用空间 %d"
+                           % (compressed_size, total - 4 - meta_len))
+
+    end = 4 + meta_len + compressed_size
+    compressed = assembled[4 + meta_len:end]
+
+    # 尾部填充全零。它不补正确性缺口（填充区污染会被精确截掉，SHA256 照样过），
+    # 真实收益是把一次静默的疑似误接受转化为可计数、可重置的诊断事件。
+    tail = assembled[end:]
+    if tail != b'\x00' * len(tail):
+        raise PayloadError('padding', "尾部填充区 %d 字节非全零（疑似误接受）" % len(tail))
+
+    try:
+        file_bytes = lzma.decompress(compressed, format=lzma.FORMAT_XZ)
+    except lzma.LZMAError as e:
+        # 绝不复用 decoder.py:362 的"当明文写出去"策略——那与 v3 要求正好相反
+        raise PayloadError('lzma', "lzma 解压失败，拒绝写文件: %s" % e) from e
+
+    if len(file_bytes) != meta['size']:
+        raise PayloadError('size', "解压后长度 %d != meta['size'] %d"
+                           % (len(file_bytes), meta['size']))
+    actual = hashlib.sha256(file_bytes).hexdigest()
+    if actual != meta['sha256']:
+        raise PayloadError('sha256', "解压后 SHA256 不匹配（期望 %s，实得 %s）"
+                           % (meta['sha256'], actual))
+    return meta, file_bytes
+
+
+def safe_output_name(filename):
+    """只取 basename，挡住路径穿越；空/危险名回落到安全默认名。"""
+    name = str(filename).replace('\\', '/').split('/')[-1]
+    name = os.path.basename(name).strip()
+    if not name or name in ('.', '..'):
+        return _DEFAULT_OUTPUT_NAME
+    return name
