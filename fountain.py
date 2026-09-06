@@ -149,3 +149,115 @@ def lt_indices(seed, table):
     state, d = sample_degree(state, table)
     state, idxs = sample_indices(state, d, table.K)
     return idxs
+
+
+# ──────────────────────────────────────────────────────────────
+# 编码器
+# ──────────────────────────────────────────────────────────────
+
+SEED_MAX = (1 << 32) - 1
+
+
+class FountainExhausted(Exception):
+    """包序号已达 2^32-1。绝不回绕——回绕会重新发出已用过的 seed，
+    被接收端按 (seed, checksum) 误判成重复包而静默丢弃，丢失新信息。"""
+
+
+def xor_bytes(dst, src):
+    """把 src 原地 XOR 进 dst（bytearray）。两者必须等长。"""
+    for i, b in enumerate(src):
+        dst[i] ^= b
+
+
+def round_permutation(round_no, K):
+    """第 round_no 轮的 0..K-1 随机置换（Fisher-Yates 自后向前）。
+
+    只影响发送端选块顺序——接收端根本不重算它，线上 seed 字段直接就是块编号。
+    写进 reference vectors 是为了让标定和测试可复现。
+    """
+    state = round_no & MASK64
+    perm = list(range(K))
+    for i in range(K - 1, 0, -1):
+        state, j = unbiased_below(state, i + 1)
+        perm[i], perm[j] = perm[j], perm[i]
+    return perm
+
+
+class FountainEncoder:
+    """把 K 个等长源块变成无限的包生成器。
+
+    发送端视角（接收端不需要知道这些分支，见 fountain.FountainDecoder）：
+    - K < LT_MIN_K：不发任何 LT 包，只循环发系统性包，每轮一个随机置换。
+      线上 seed = 块编号，恒落在 [0, K)。
+    - K >= LT_MIN_K：线上 seed = 单调递增的包序号 n。前 K 个（n = 0..K-1）
+      天然是系统性包，其后 n >= K 全是 LT 包。
+    - M：K >= LT_MIN_K 时每发 M 个 LT 包插入一轮完整的 K 个系统性包，
+      复用块号作为线上 seed（因此 < K），接收端零改动。
+      M=None 表示无穷大（关闭），行为与不加此机制逐字节相同。
+    """
+
+    def __init__(self, blocks, M=None):
+        if not blocks:
+            raise ValueError("blocks 不能为空")
+        blocklen = len(blocks[0])
+        if blocklen == 0:
+            raise ValueError("blocklen 不能为 0")
+        if any(len(b) != blocklen for b in blocks):
+            raise ValueError("所有源块必须等长（XOR 的前提）")
+        if M is not None and M < 1:
+            raise ValueError("M 必须 >= 1，或用 None 表示无穷大")
+
+        self.blocks = [bytes(b) for b in blocks]
+        self.K = len(self.blocks)
+        self.blocklen = blocklen
+        self.M = M
+        self._n = 0                  # 包序号；K >= LT_MIN_K 时即线上 seed
+        self._lt_since = 0           # 距上一轮系统性重发已发了多少个 LT 包
+        self._resend = []            # 待插入的系统性块号队列
+        self._perm_round = -1
+        self._perm = None
+        self._table = DegreeTable(self.K) if self.K >= LT_MIN_K else None
+
+    def next_packet(self):
+        """返回 (线上 seed, data)。data 长度恒为 blocklen。"""
+        if self.K < LT_MIN_K:
+            return self._next_systematic_cycle()
+        return self._next_lt()
+
+    def _next_systematic_cycle(self):
+        round_no, j = divmod(self._n, self.K)
+        if round_no != self._perm_round:
+            self._perm = round_permutation(round_no, self.K)
+            self._perm_round = round_no
+        seed = self._perm[j]
+        self._n += 1
+        return seed, self.blocks[seed]
+
+    def _next_lt(self):
+        # 插入轮优先，且不推进包序号 n
+        if self._resend:
+            block = self._resend.pop(0)
+            return block, self.blocks[block]
+
+        n = self._n
+        if n > SEED_MAX:
+            raise FountainExhausted(
+                "包序号已达 2^32-1（%d），停止发送。绝不回绕。" % SEED_MAX
+            )
+        self._n = n + 1
+
+        if n < self.K:
+            return n, self.blocks[n]
+
+        idxs = lt_indices(n, self._table)
+        data = bytearray(self.blocks[idxs[0]])
+        for i in idxs[1:]:
+            xor_bytes(data, self.blocks[i])
+
+        if self.M is not None:
+            self._lt_since += 1
+            if self._lt_since >= self.M:
+                self._lt_since = 0
+                self._resend = list(range(self.K))
+
+        return n, bytes(data)

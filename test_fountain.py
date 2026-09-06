@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fountain import (
     MASK64, splitmix64_next, unbiased_below,
     LT_MIN_K, DegreeTable, sample_degree, sample_indices, lt_indices,
+    SEED_MAX, FountainExhausted, FountainEncoder, round_permutation, xor_bytes,
 )
 
 
@@ -224,6 +225,152 @@ def test_sample_degree_bounds():
     print("  ✅ PASSED")
 
 
+def test_round_permutation_reference_vectors():
+    print("[TEST] round_permutation reference vectors...")
+    cases = {
+        (1, 0): [0], (1, 1): [0], (1, 2): [0],
+        (2, 0): [0, 1], (2, 1): [0, 1], (2, 2): [1, 0],
+        (5, 0): [2, 3, 1, 4, 0], (5, 1): [2, 1, 4, 3, 0], (5, 2): [1, 3, 4, 2, 0],
+        (9, 0): [1, 0, 3, 5, 6, 8, 2, 4, 7],
+        (9, 1): [2, 4, 3, 0, 6, 8, 1, 7, 5],
+        (9, 2): [5, 1, 7, 3, 8, 6, 0, 2, 4],
+    }
+    for (K, r), want in sorted(cases.items()):
+        got = round_permutation(r, K)
+        assert got == want, "K=%d round=%d 应为 %r，实得 %r" % (K, r, want, got)
+    # 任何轮次都必须是 0..K-1 的一个真置换
+    for K in range(1, 10):
+        for r in range(50):
+            perm = round_permutation(r, K)
+            assert sorted(perm) == list(range(K)), "K=%d round=%d 不是合法置换" % (K, r)
+    print("  ✅ PASSED")
+
+
+def test_encoder_small_k_is_pure_systematic():
+    print("[TEST] K<=9 只发系统性包，线上 seed 恒 < K...")
+    blocks = [bytes([i]) * 8 for i in range(9)]
+    enc = FountainEncoder(blocks)
+    assert enc.K == 9 and enc.blocklen == 8
+    for _ in range(500):
+        seed, data = enc.next_packet()
+        assert 0 <= seed < 9, "K<=9 时线上 seed 必须恒落在 [0, K)，实得 %d" % seed
+        assert data == blocks[seed], "系统性包的 data 必须就是源块 seed 本身"
+    print("  ✅ PASSED")
+
+
+def test_encoder_small_k_covers_every_round():
+    print("[TEST] K<=9 每一轮全覆盖...")
+    blocks = [bytes([i]) * 4 for i in range(5)]
+    enc = FountainEncoder(blocks)
+    for _ in range(20):                      # 20 轮
+        seeds = [enc.next_packet()[0] for _ in range(5)]
+        assert sorted(seeds) == [0, 1, 2, 3, 4], \
+            "每轮必须恰好覆盖全部 K 个块一次，实得 %r" % (seeds,)
+    print("  ✅ PASSED")
+
+
+def test_encoder_periodic_loss_regression():
+    print("[TEST] 周期丢帧回归：固定顺序永久缺块，随机置换能收齐...")
+    K = 9
+
+    def frames_to_collect(use_permutation, max_frames):
+        got, n = set(), 0
+        while len(got) < K and n < max_frames:
+            r, j = divmod(n, K)
+            blk = round_permutation(r, K)[j] if use_permutation else j
+            if n % K != 0:                   # 每 K 帧丢 1 帧，丢帧率仅 11%
+                got.add(blk)
+            n += 1
+        return n if len(got) == K else None
+
+    assert frames_to_collect(False, 9000) is None, \
+        "固定顺序在周期丢帧下必然永久缺块（这正是要修的病态别名）"
+    got = frames_to_collect(True, 9000)
+    assert got is not None and got <= 30, \
+        "随机置换应在 30 帧内收齐，实得 %r" % (got,)
+    print("  ✅ PASSED")
+
+
+def test_encoder_large_k_seed_is_monotonic():
+    print("[TEST] K>=10 线上 seed = 单调递增的包序号 n...")
+    blocks = [bytes([i]) * 16 for i in range(12)]
+    enc = FountainEncoder(blocks)
+    for n in range(300):
+        seed, data = enc.next_packet()
+        assert seed == n, "K>=10 且 M=∞ 时线上 seed 必须等于包序号 %d，实得 %d" % (n, seed)
+        assert len(data) == 16
+    print("  ✅ PASSED")
+
+
+def test_encoder_large_k_first_k_are_systematic():
+    print("[TEST] K>=10 前 K 个包天然是系统性包...")
+    blocks = [bytes([i]) * 16 for i in range(12)]
+    enc = FountainEncoder(blocks)
+    for n in range(12):
+        seed, data = enc.next_packet()
+        assert seed == n
+        assert data == blocks[n], "前 K 个包的 data 必须就是源块本身"
+    print("  ✅ PASSED")
+
+
+def test_encoder_m_parameter_inserts_systematic_rounds():
+    print("[TEST] M 参数：每 M 个 LT 包插一轮 K 个系统性包...")
+    K, M = 10, 5
+    blocks = [bytes([i]) * 8 for i in range(K)]
+    enc = FountainEncoder(blocks, M=M)
+    seeds = [enc.next_packet()[0] for _ in range(K + M + K + 3)]
+    # 前 K 个：系统性（n = 0..K-1）
+    assert seeds[:K] == list(range(K))
+    # 接着 M 个 LT 包：seed = K..K+M-1
+    assert seeds[K:K + M] == list(range(K, K + M))
+    # 然后插入一轮完整的 K 个系统性包，seed 复用块号（因此 < K）
+    inserted = seeds[K + M:K + M + K]
+    assert sorted(inserted) == list(range(K)), \
+        "插入轮必须是完整的 K 个块号，实得 %r" % (inserted,)
+    # 插入轮不推进包序号 n，恢复后继续从 K+M 递增
+    assert seeds[K + M + K:] == [K + M, K + M + 1, K + M + 2], \
+        "插入轮不得推进包序号 n，实得 %r" % (seeds[K + M + K:],)
+    print("  ✅ PASSED")
+
+
+def test_encoder_m_infinity_is_byte_identical():
+    print("[TEST] M=None（∞）与不加此机制逐字节相同...")
+    K = 12
+    blocks = [bytes([i]) * 8 for i in range(K)]
+    a = FountainEncoder(blocks, M=None)
+    b = FountainEncoder(blocks)
+    for _ in range(200):
+        assert a.next_packet() == b.next_packet()
+    print("  ✅ PASSED")
+
+
+def test_encoder_seed_does_not_wrap():
+    print("[TEST] seed 到 2^32-1 停止，绝不回绕...")
+    K = 10
+    blocks = [bytes([i]) * 4 for i in range(K)]
+    enc = FountainEncoder(blocks)
+    enc._n = SEED_MAX                        # 直接推到边界
+    seed, _ = enc.next_packet()
+    assert seed == SEED_MAX
+    try:
+        enc.next_packet()
+    except FountainExhausted:
+        print("  ✅ PASSED")
+        return
+    raise AssertionError("超过 SEED_MAX 必须抛 FountainExhausted，绝不回绕")
+
+
+def test_encoder_rejects_ragged_blocks():
+    print("[TEST] 源块必须等长...")
+    for bad in ([], [b'aaa', b'aa'], [b'', b'']):
+        try:
+            FountainEncoder(bad)
+        except ValueError:
+            continue
+        raise AssertionError("应当拒绝 %r" % (bad,))
+    print("  ✅ PASSED")
+
+
 if __name__ == '__main__':
     test_splitmix64_reference_vectors()
     test_unbiased_below_convention_n1()
@@ -236,4 +383,14 @@ if __name__ == '__main__':
     test_lt_indices_reference_vectors()
     test_sample_indices_no_duplicates()
     test_sample_degree_bounds()
+    test_round_permutation_reference_vectors()
+    test_encoder_small_k_is_pure_systematic()
+    test_encoder_small_k_covers_every_round()
+    test_encoder_periodic_loss_regression()
+    test_encoder_large_k_seed_is_monotonic()
+    test_encoder_large_k_first_k_are_systematic()
+    test_encoder_m_parameter_inserts_systematic_rounds()
+    test_encoder_m_infinity_is_byte_identical()
+    test_encoder_seed_does_not_wrap()
+    test_encoder_rejects_ragged_blocks()
     print("\n✅ All fountain PRNG tests passed!")
