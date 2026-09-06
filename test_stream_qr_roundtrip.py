@@ -123,6 +123,75 @@ def test_encoder_chunk_to_qr_image_default_unchanged():
     print("  ✅ PASSED")
 
 
+def test_backend_accepts_path_and_pil_image():
+    print("[TEST] backend 的 decode_image 同时接受路径和 PIL Image...")
+    import tempfile
+    from qr_backends import get_backend
+
+    payload = b'polymorphic source test' * 20
+    img = QRSymbolEncoder().encode(payload)
+    backend = get_backend('zxing')
+
+    from_image = backend.decode_image(img)
+    assert len(from_image) == 1, "传 PIL Image 应读出 1 个码"
+    assert base64.b85decode(from_image[0].data) == payload
+
+    with tempfile.TemporaryDirectory(prefix='queqiao-poly-') as d:
+        path = os.path.join(d, 'q.png')
+        img.save(path, format='PNG')
+        from_path = backend.decode_image(path)
+        assert len(from_path) == 1, "传路径应读出 1 个码"
+        assert from_path[0].data == from_image[0].data, "两种入参必须得到相同结果"
+    print("  ✅ PASSED")
+
+
+def test_backend_does_not_close_borrowed_image():
+    print("[TEST] 借用的 PIL Image 不能被 backend 关掉...")
+    from qr_backends import get_backend
+
+    img = QRSymbolEncoder().encode(b'do not close me' * 20)
+    backend = get_backend('zxing')
+    for _ in range(3):
+        backend.decode_image(img)
+        # 若 backend 关掉了借用的对象，下一次访问会抛
+        # "Attempt to use a closed image" / ValueError
+        assert img.size[0] > 0, "backend 关掉了调用方的 Image —— 流式下一帧就废了"
+        img.convert('L')
+    print("  ✅ PASSED")
+
+
+def test_backend_closes_its_own_file_handles():
+    print("[TEST] 自己 open 的图像在异常路径上也要关...")
+    import gc
+    import tempfile
+    import warnings
+    from qr_backends import get_backend
+
+    backend = get_backend('zxing')
+    with tempfile.TemporaryDirectory(prefix='queqiao-close-') as d:
+        path = os.path.join(d, 'q.png')
+        QRSymbolEncoder().encode(b'close me' * 20).save(path, format='PNG')
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', ResourceWarning)
+            for _ in range(20):
+                backend.decode_image(path)
+            gc.collect()          # 未关闭的文件句柄会在此处触发 ResourceWarning
+    print("  ✅ PASSED")
+
+
+def test_backend_bad_source_still_raises():
+    print("[TEST] 坏输入仍抛 ValueError（v1/v2 行为不变）...")
+    from qr_backends import get_backend
+    backend = get_backend('zxing')
+    for bad in ('/nonexistent/path/nope.png', 12345, None):
+        try:
+            backend.decode_image(bad)
+        except ValueError:
+            continue
+        raise AssertionError("坏输入 %r 应抛 ValueError" % (bad,))
+    print("  ✅ PASSED")
+
+
 if __name__ == '__main__':
     test_max_raw_for_base85_matches_real_encoder()
     test_qr_symbol_encoder_contract()
@@ -131,4 +200,8 @@ if __name__ == '__main__':
     test_encode_does_not_double_base85()
     test_ecc_levels_change_output()
     test_encoder_chunk_to_qr_image_default_unchanged()
+    test_backend_accepts_path_and_pil_image()
+    test_backend_does_not_close_borrowed_image()
+    test_backend_closes_its_own_file_handles()
+    test_backend_bad_source_still_raises()
     print("\n✅ All symbol encoder tests passed!")

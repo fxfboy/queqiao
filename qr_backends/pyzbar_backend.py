@@ -5,8 +5,6 @@ macOS 上 run.sh 会自动 export DYLD_LIBRARY_PATH=/opt/homebrew/lib。
 """
 import hashlib
 
-from PIL import Image
-
 from .base import QRDecoderAdapter, QRDecodeResult
 
 
@@ -26,21 +24,21 @@ class PyzbarQRDecoder(QRDecoderAdapter):
         self.pyzbar_decode = pyzbar_decode
         self.qrcode_symbol = ZBarSymbol.QRCODE
 
-    def decode_image(self, image_path):
+    def decode_image(self, source):
+        img, should_close = self._as_image(source)
         try:
-            img = Image.open(image_path)
-        except Exception as e:
-            raise ValueError(f"Cannot read image: {image_path}") from e
-
-        results = []
-        for mode in [None, 'L', '1']:
-            try:
-                test_img = img if mode is None else img.convert(mode)
-                results.extend(
-                    self.pyzbar_decode(test_img, symbols=[self.qrcode_symbol])
-                )
-            except Exception:
-                pass
+            results = []
+            for mode in [None, 'L', '1']:
+                try:
+                    test_img = img if mode is None else img.convert(mode)
+                    results.extend(
+                        self.pyzbar_decode(test_img, symbols=[self.qrcode_symbol])
+                    )
+                except Exception:
+                    pass
+        finally:
+            if should_close:
+                img.close()
 
         seen = set()
         unique = []
