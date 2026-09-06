@@ -73,7 +73,7 @@ def test_encode_returns_real_pil_image():
     enc = QRSymbolEncoder()
     img = enc.encode(b'hello' * 20)
     assert isinstance(img, Image.Image), \
-        "必须是 PIL.Image.Image（tkinter 的 ImageTk 和 backend 都要它），实得 %r" % type(img)
+        "必须是 PIL.Image.Image（player 要 .save(format='PNG')，backend 要它），实得 %r" % type(img)
     assert img.size[0] > 0 and img.size[1] > 0
     # 能被 PIL 正常保存和重开
     buf = io.BytesIO()

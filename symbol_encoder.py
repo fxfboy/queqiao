@@ -85,6 +85,9 @@ class QRSymbolEncoder(SymbolEncoder):
         img = chunk_to_qr_image(payload, box_size=self.box_size,
                                border=self.border, ecc=self.ecc)
         # qrcode 返回的是 PilImage wrapper，取出真 PIL Image。
-        # 转 RGB 是因为 tkinter 的 ImageTk 对 '1' 模式在部分平台上表现不稳。
+        # 转 RGB 是保守选择，不是必需：qrcode 原生给的是 '1' 模式，实测 '1'/'L'/'RGB'
+        # 三种模式在 Tk 8.6 的 PhotoImage 和 zxing backend 上都能正常吃下，'1' 的 PNG
+        # 还只有 RGB 的一半大。但那只在一台 macOS + Tk 8.6 上验过，而 Windows 侧的
+        # Tk 版本未知；每帧多几 KB 对 167 ms 的预算毫无影响，不值得拿跨平台确定性换。
         pil = img.get_image() if hasattr(img, 'get_image') else img
         return pil.convert('RGB')
