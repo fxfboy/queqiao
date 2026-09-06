@@ -4,6 +4,7 @@
 规格 §6.6 的校验清单每一条都必须有一个负例。任何一条漏了，
 接收端就会在那条上被畸形包穿透。
 """
+import base64
 import hashlib
 import os
 import struct
@@ -399,6 +400,27 @@ def test_safe_output_name():
     print("  ✅ PASSED")
 
 
+def test_v1_decoder_notices_v3_packets():
+    print("[TEST] v1/v2 解码器认出 v3 的 QF 包并计数...")
+    import decoder as v12_decoder
+
+    v12_decoder.reset_v3_counter()
+    assert v12_decoder.V3_MAGIC_SEEN[0] == 0
+
+    v3_raw = pack_packet(nonce=1, seed=2, K=3, blocklen=16, data=b'v' * 16)
+    b85 = base64.b85encode(v3_raw)
+    assert v12_decoder.decode_single_chunk(b85) is None, \
+        "v3 包在 v1 解析器眼里必须是 None，主签名与返回形态不变"
+    assert v12_decoder.V3_MAGIC_SEEN[0] == 1, "应记下一次 QF 命中"
+
+    # 普通垃圾不该被计数
+    v12_decoder.decode_single_chunk(base64.b85encode(b'garbage payload here'))
+    assert v12_decoder.V3_MAGIC_SEEN[0] == 1, "非 QF 的数据不得计入"
+    v12_decoder.reset_v3_counter()
+    assert v12_decoder.V3_MAGIC_SEEN[0] == 0
+    print("  ✅ PASSED")
+
+
 if __name__ == '__main__':
     test_pack_roundtrip()
     test_header_field_layout()
@@ -415,4 +437,5 @@ if __name__ == '__main__':
     test_payload_roundtrip()
     test_payload_checklist_negatives()
     test_safe_output_name()
+    test_v1_decoder_notices_v3_packets()
     print("\n✅ All stream packet tests passed!")

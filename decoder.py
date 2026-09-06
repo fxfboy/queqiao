@@ -100,6 +100,16 @@ def sort_qr_by_position(qr_list):
 # 3. 解码分片数据
 # ──────────────────────────────────────────────────────────────
 
+# v3 流式包（MAGIC='QF'）在 v1/v2 解析器眼里是 None。用一个带外计数器记下命中
+# 次数，由主流程在收尾时提示用户改用 ./run.sh receive——不改 decode_single_chunk
+# 的签名和返回形态。用单元素列表而不是标量，是为了避免在函数里写 global。
+V3_MAGIC_SEEN = [0]
+
+
+def reset_v3_counter():
+    V3_MAGIC_SEEN[0] = 0
+
+
 def decode_single_chunk(payload, payload_encoding='base85'):
     """
     解码单个分片
@@ -135,6 +145,8 @@ def decode_single_chunk(payload, payload_encoding='base85'):
         # 解析头部
         magic = raw[:2]
         if magic != MAGIC:
+            if magic == b'QF':
+                V3_MAGIC_SEEN[0] += 1
             return None
         
         idx, total, datalen = struct.unpack('>HHH', raw[2:8])
@@ -342,6 +354,9 @@ def main():
         )
     except ValueError as e:
         print(f"\n❌ Failed: {e}")
+        if V3_MAGIC_SEEN[0]:
+            print(f"  ℹ️  检测到 {V3_MAGIC_SEEN[0]} 个 v3 流式包（MAGIC='QF'）。")
+            print("      这些图片来自 ./run.sh stream，请改用 ./run.sh receive 解码。")
         sys.exit(1)
 
     print(f"  ✅ All {stats['total']} chunks verified")
