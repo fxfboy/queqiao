@@ -261,3 +261,128 @@ class FountainEncoder:
                 self._resend = list(range(self.K))
 
         return n, bytes(data)
+
+
+# ──────────────────────────────────────────────────────────────
+# 解码器：朴素剥离（peeling），不做高斯消元
+# ──────────────────────────────────────────────────────────────
+
+# 未剥离方程的存储上限（规格 §9）。超限时停止接纳新方程并计数，不无限增长。
+MAX_PENDING_EQUATIONS = 4096
+MAX_PENDING_INDEX_TOTAL = 1 << 20
+
+
+class FountainDecoder:
+    """增量喂包，解出 K 个源块。
+
+    接收端的 seed 判定是唯一权威，且没有任何 K<=9 / K>=10 的模式分支：
+        seed <  K  -> 系统性包，data 直接就是源块 seed 本身（度 1）
+        seed >= K  -> LT 包，以 seed 为 splitmix64 种子推出度与索引
+    """
+
+    def __init__(self, K, blocklen, stall_threshold=32):
+        if K < 1:
+            raise ValueError("K 必须 >= 1")
+        if blocklen < 1:
+            raise ValueError("blocklen 必须 >= 1")
+        self.K = K
+        self.blocklen = blocklen
+        self.stall_threshold = stall_threshold
+        self._table = DegreeTable(K) if K >= LT_MIN_K else None
+        self.reset()
+
+    def reset(self):
+        """清空全部解码状态。SHA256 不匹配时由调用方触发（规格 §9）。"""
+        self._solved = {}                 # idx -> bytes
+        self._pending = []                # [[set(indices), bytearray(data)], ...]
+        self._pending_index_total = 0
+        self._since_progress = 0
+        self.equations_dropped = 0
+
+    @property
+    def solved_count(self):
+        return len(self._solved)
+
+    @property
+    def pending_count(self):
+        return len(self._pending)
+
+    @property
+    def is_complete(self):
+        return len(self._solved) == self.K
+
+    @property
+    def is_stalled(self):
+        """连续 stall_threshold 个包没推进任何块。进度条不能继续假涨。"""
+        return not self.is_complete and self._since_progress >= self.stall_threshold
+
+    def add_packet(self, seed, data):
+        """喂一个包。返回 True 表示本包推进了至少一块。"""
+        if len(data) != self.blocklen:
+            raise ValueError(
+                "data 长度必须恒等于 blocklen=%d，实得 %d" % (self.blocklen, len(data))
+            )
+        if seed < self.K:
+            idxs = {seed}
+        else:
+            idxs = set(lt_indices(seed, self._table))
+
+        before = len(self._solved)
+        self._absorb(idxs, bytearray(data))
+        progressed = len(self._solved) > before
+        self._since_progress = 0 if progressed else self._since_progress + 1
+        return progressed
+
+    def _absorb(self, idxs, data):
+        queue = [(idxs, data)]
+        while queue:
+            idxs, data = queue.pop()
+            # 先用已解出的块把度降下来
+            known = idxs & self._solved.keys()
+            if known:
+                for i in known:
+                    xor_bytes(data, self._solved[i])
+                idxs = idxs - known
+            if not idxs:
+                continue                          # 冗余包，信息量为零，丢弃
+            if len(idxs) > 1:
+                self._park(idxs, data)
+                continue
+
+            i = idxs.pop()
+            if i in self._solved:
+                continue
+            self._solved[i] = bytes(data)
+
+            # 用新解出的块化简所有未剥离方程
+            still = []
+            for p_idx, p_data in self._pending:
+                if i in p_idx:
+                    self._pending_index_total -= len(p_idx)
+                    xor_bytes(p_data, self._solved[i])
+                    p_idx = p_idx - {i}
+                    if not p_idx:
+                        continue                  # 化简成空，丢弃
+                    if len(p_idx) == 1:
+                        queue.append((p_idx, p_data))
+                        continue
+                    self._pending_index_total += len(p_idx)
+                still.append([p_idx, p_data])
+            self._pending = still
+
+    def _park(self, idxs, data):
+        if (len(self._pending) >= MAX_PENDING_EQUATIONS
+                or self._pending_index_total + len(idxs) > MAX_PENDING_INDEX_TOTAL):
+            self.equations_dropped += 1           # 停止接纳，计数，不无限增长
+            return
+        self._pending.append([idxs, data])
+        self._pending_index_total += len(idxs)
+
+    def assemble(self):
+        """按块号拼出完整 payload（含尾部填充）。未完成时抛 ValueError。"""
+        if not self.is_complete:
+            raise ValueError(
+                "只解出 %d/%d 块，不能拼装。收够包数不等于能解出（本设计不做高斯消元）"
+                % (len(self._solved), self.K)
+            )
+        return b''.join(self._solved[i] for i in range(self.K))

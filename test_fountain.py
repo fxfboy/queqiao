@@ -14,6 +14,7 @@ from fountain import (
     MASK64, splitmix64_next, unbiased_below,
     LT_MIN_K, DegreeTable, sample_degree, sample_indices, lt_indices,
     SEED_MAX, FountainExhausted, FountainEncoder, round_permutation, xor_bytes,
+    FountainDecoder, MAX_PENDING_EQUATIONS,
 )
 
 
@@ -371,6 +372,159 @@ def test_encoder_rejects_ragged_blocks():
     print("  ✅ PASSED")
 
 
+def test_decoder_systematic_only():
+    print("[TEST] 解码器：纯系统性包（K<=9 路径）...")
+    K = 5
+    blocks = [bytes([i]) * 16 for i in range(K)]
+    enc = FountainEncoder(blocks)
+    dec = FountainDecoder(K, 16)
+    while not dec.is_complete:
+        seed, data = enc.next_packet()
+        dec.add_packet(seed, data)
+    assert dec.solved_count == K
+    assert dec.assemble() == b''.join(blocks)
+    print("  ✅ PASSED")
+
+
+def test_decoder_lossless_large_k_completes_in_k_packets():
+    print("[TEST] 无损信道下 K>=10 收前 K 个系统性包即完成，零剥离...")
+    for K in (10, 40, 100):
+        blocks = [bytes([(i * 7 + j) % 256 for j in range(24)]) for i in range(K)]
+        enc = FountainEncoder(blocks)
+        dec = FountainDecoder(K, 24)
+        for _ in range(K):
+            seed, data = enc.next_packet()
+            dec.add_packet(seed, data)
+        assert dec.is_complete, "K=%d 收满前 K 个系统性包必须完成" % K
+        assert dec.assemble() == b''.join(blocks)
+    print("  ✅ PASSED")
+
+
+def test_decoder_tolerates_loss_reorder_duplicate():
+    print("[TEST] 解码器容忍丢帧、乱序、重复帧...")
+    import random
+    K = 60
+    rng = random.Random(20260905)
+    blocks = [bytes(rng.getrandbits(8) for _ in range(32)) for _ in range(K)]
+    enc = FountainEncoder(blocks)
+
+    pool = [enc.next_packet() for _ in range(400)]
+    kept = [p for p in pool if rng.random() >= 0.35]       # 丢 35%
+    kept = kept + kept[:40]                                # 混入重复帧
+    rng.shuffle(kept)                                      # 打乱顺序
+
+    dec = FountainDecoder(K, 32)
+    for seed, data in kept:
+        dec.add_packet(seed, data)
+        if dec.is_complete:
+            break
+    assert dec.is_complete, "丢 35% + 乱序 + 重复下应能解出，实得 %d/%d" % (dec.solved_count, K)
+    assert dec.assemble() == b''.join(blocks)
+    print("  ✅ PASSED")
+
+
+def test_decoder_does_not_lie_about_completion():
+    print("[TEST] 收到 K 个包但 peeling 停滞时不谎报完成...")
+    # 手工构造：只喂进 K 个包，但其中没有任何一个能启动剥离链。
+    K = 20
+    blocks = [bytes([i]) * 8 for i in range(K)]
+    table = DegreeTable(K)
+    dec = FountainDecoder(K, 8)
+    fed = 0
+    seed = K
+    while fed < K:
+        idxs = lt_indices(seed, table)
+        if len(idxs) >= 2:                    # 只喂度 >= 2 的包，永远启动不了
+            data = bytearray(blocks[idxs[0]])
+            for i in idxs[1:]:
+                xor_bytes(data, blocks[i])
+            dec.add_packet(seed, bytes(data))
+            fed += 1
+        seed += 1
+    assert not dec.is_complete, "没有度 1 包时绝不能报完成"
+    assert dec.solved_count == 0, "剥离无法启动，已解出块数应为 0"
+    try:
+        dec.assemble()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("未完成时 assemble() 必须抛 ValueError")
+    print("  ✅ PASSED")
+
+
+def test_decoder_stall_detection():
+    print("[TEST] 剥离停滞检测...")
+    K = 20
+    blocks = [bytes([i]) * 8 for i in range(K)]
+    table = DegreeTable(K)
+    dec = FountainDecoder(K, 8, stall_threshold=5)
+    assert not dec.is_stalled, "刚开始不算停滞"
+    seed, fed = K, 0
+    while fed < 8:
+        idxs = lt_indices(seed, table)
+        if len(idxs) >= 2:
+            data = bytearray(blocks[idxs[0]])
+            for i in idxs[1:]:
+                xor_bytes(data, blocks[i])
+            progressed = dec.add_packet(seed, bytes(data))
+            assert not progressed, "度 >= 2 且无已解块时不应推进"
+            fed += 1
+        seed += 1
+    assert dec.is_stalled, "连续 %d 个包没推进任何块，应报停滞" % 8
+    # 喂一个系统性包让剥离启动，停滞标志必须清掉
+    dec.add_packet(0, blocks[0])
+    assert not dec.is_stalled, "有推进后必须清掉停滞标志"
+    print("  ✅ PASSED")
+
+
+def test_decoder_rejects_wrong_blocklen():
+    print("[TEST] 解码器拒绝长度不符的 data...")
+    dec = FountainDecoder(10, 8)
+    for bad in (b'', b'x' * 7, b'x' * 9):
+        try:
+            dec.add_packet(0, bad)
+        except ValueError:
+            continue
+        raise AssertionError("应拒绝长度 %d 的 data" % len(bad))
+    print("  ✅ PASSED")
+
+
+def test_decoder_pending_cap():
+    print("[TEST] 未剥离方程数有上限，不无限增长...")
+    K = 200
+    blocks = [bytes([i % 256]) * 8 for i in range(K)]
+    table = DegreeTable(K)
+    dec = FountainDecoder(K, 8)
+    seed = K
+    while dec.pending_count < MAX_PENDING_EQUATIONS + 50 and seed < K + 60000:
+        idxs = lt_indices(seed, table)
+        if len(idxs) >= 2:
+            data = bytearray(blocks[idxs[0]])
+            for i in idxs[1:]:
+                xor_bytes(data, blocks[i])
+            dec.add_packet(seed, bytes(data))
+        seed += 1
+    assert dec.pending_count <= MAX_PENDING_EQUATIONS, \
+        "未剥离方程数 %d 超过上限 %d" % (dec.pending_count, MAX_PENDING_EQUATIONS)
+    assert dec.equations_dropped > 0, "超限时应计数丢弃的方程"
+    print("  ✅ PASSED")
+
+
+def test_decoder_reset():
+    print("[TEST] reset() 清空全部解码状态...")
+    K = 12
+    blocks = [bytes([i]) * 8 for i in range(K)]
+    enc = FountainEncoder(blocks)
+    dec = FountainDecoder(K, 8)
+    for _ in range(K):
+        dec.add_packet(*enc.next_packet())
+    assert dec.is_complete
+    dec.reset()
+    assert dec.solved_count == 0 and dec.pending_count == 0 and not dec.is_complete
+    assert not dec.is_stalled
+    print("  ✅ PASSED")
+
+
 if __name__ == '__main__':
     test_splitmix64_reference_vectors()
     test_unbiased_below_convention_n1()
@@ -393,4 +547,12 @@ if __name__ == '__main__':
     test_encoder_m_infinity_is_byte_identical()
     test_encoder_seed_does_not_wrap()
     test_encoder_rejects_ragged_blocks()
+    test_decoder_systematic_only()
+    test_decoder_lossless_large_k_completes_in_k_packets()
+    test_decoder_tolerates_loss_reorder_duplicate()
+    test_decoder_does_not_lie_about_completion()
+    test_decoder_stall_detection()
+    test_decoder_rejects_wrong_blocklen()
+    test_decoder_pending_cap()
+    test_decoder_reset()
     print("\n✅ All fountain PRNG tests passed!")
