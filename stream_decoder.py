@@ -21,6 +21,10 @@ from frame_source import (
 )
 from qr_backends import DEFAULT_BACKEND, available_backends, get_backend
 from stream_packet import PayloadError, parse_payload, safe_output_name
+from stream_profile import (
+    CALIBRATION_MATRIX, CONSERVATIVE_DEFAULTS, CalibrationCollector,
+    MIN_ACCEPTABLE_RATE, save_profile,
+)
 from stream_session import StreamSession
 
 
@@ -163,6 +167,32 @@ def write_output(meta, file_bytes, out_dir=None, out_path=None):
     return target
 
 
+def run_calibration(source, backend, duration):
+    """标定接收：不做剥离，只按 (K, blocklen) 分档统计 seed 缺号。
+
+    §7.4：报的是**单帧解出率**，不是整文件恢复率。喷泉码会把丢包补回来，
+    整文件恢复率在很宽的参数区间里都是 100%，对区分档位毫无分辨力。
+    """
+    collector = CalibrationCollector()
+    deadline = time.monotonic() + duration
+    frames = 0
+    for image in source:
+        try:
+            for raw in decode_frame(image, backend):
+                collector.feed(raw)
+        finally:
+            image.close()
+        frames += 1
+        if frames % 20 == 0:
+            stages = len(collector.report())
+            print("\r  已抓 %d 帧，识别到 %d 档..." % (frames, stages),
+                  end='', flush=True)
+        if time.monotonic() >= deadline:
+            break
+    print()
+    return collector, frames
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog='receive',
@@ -184,6 +214,10 @@ def main(argv=None):
                         help='重新圈选区域（默认复用 ~/.queqiao/last_region.json）')
     parser.add_argument('--interval', type=float, default=0.0,
                         help='两帧之间的额外等待秒数 (默认: 0，尽快抓)')
+    parser.add_argument('--calibrate', action='store_true',
+                        help='标定模式: 配合 stream --calibrate 使用，测各档单帧解出率')
+    parser.add_argument('--calibrate-seconds', type=int, default=None,
+                        help='标定采集总秒数 (默认: 档数 × 20 + 10)')
     args = parser.parse_args(argv)
 
     try:
@@ -202,6 +236,65 @@ def main(argv=None):
         return 1
 
     source = ScreenSource(bbox, interval=args.interval)
+
+    if args.calibrate:
+        duration = args.calibrate_seconds or (len(CALIBRATION_MATRIX) * 20 + 10)
+        print("=" * 60)
+        print("  QueQiao (鹊桥) - 标定接收")
+        print("=" * 60)
+        print("  区域:   %s" % source.describe)
+        print("  采集 %d 秒。发送端现在就运行: ./run.sh stream --calibrate" % duration)
+        print("=" * 60)
+        try:
+            collector, frames = run_calibration(source, backend, duration)
+        except KeyboardInterrupt:
+            print("\n  已中止。")
+            return 130
+
+        reports = collector.report()
+        if not reports:
+            print("\n❌ 一个包都没收到。检查：")
+            print("   · 发送端是否已在 --calibrate 模式播放")
+            print("   · 圈选区域是否覆盖了播放窗（--reselect 重选）")
+            print("   · macOS 是否已授予屏幕录制权限")
+            return 1
+
+        print("\n  抓了 %d 帧，识别到 %d 档：\n" % (frames, len(reports)))
+        for r in reports:
+            mark = '✅' if r.decode_rate >= MIN_ACCEPTABLE_RATE else '❌'
+            print("   %s %s" % (mark, r.line()))
+        if len(reports) < len(CALIBRATION_MATRIX):
+            print("\n  ⚠️  只识别到 %d/%d 档。采集时间可能不够，或高密度档一个都没解出来。"
+                  % (len(reports), len(CALIBRATION_MATRIX)))
+
+        best = collector.best(CALIBRATION_MATRIX)
+        if best is None:
+            print("\n  ⚠️  没有任何一档达到 %.0f%% 单帧解出率。保守默认不变。"
+                  "可以试试调大 --box-size、把 RDP 画质调到最高、或关掉动态分辨率。"
+                  % (MIN_ACCEPTABLE_RATE * 100))
+            return 1
+
+        chosen = collector.report()
+        picked = [r for r in chosen if r.blocklen == best['blocklen']][0]
+        best = dict(best)
+        # 矩阵条目只有 blocklen/ecc/box_size，validate_settings 要求四项齐全。
+        # fps 不是标定维度（见 Step 5 的说明），补基准值。
+        best['fps'] = CONSERVATIVE_DEFAULTS['fps']
+        p = save_profile(best, measurements={
+            'decode_rate': round(picked.decode_rate, 4),
+            'max_gap': picked.max_gap,
+            'frames': frames,
+            'stages_seen': len(reports),
+        })
+        print("\n" + "=" * 60)
+        print("✅ 标定完成，已选 blocklen=%d ecc=%s box_size=%d"
+              % (best['blocklen'], best['ecc'], best['box_size']))
+        print("  单帧解出率 %.2f%%，最长连丢 %d 帧"
+              % (picked.decode_rate * 100, picked.max_gap))
+        print("  已写入 %s" % p)
+        print("=" * 60)
+        return 0
+
     session = StreamSession()
 
     print("=" * 60)

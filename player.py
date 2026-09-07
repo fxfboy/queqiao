@@ -54,6 +54,7 @@ import tkinter as tk          # noqa: E402 - 必须在 ensure_tcl_env() 之后
 
 from stream_encoder import DEFAULT_BLOCKLEN, GeneratorError, StreamEncoder  # noqa: E402
 from symbol_encoder import QRSymbolEncoder  # noqa: E402
+from stream_profile import CALIBRATION_MATRIX, load_profile, synthetic_payload  # noqa: E402
 
 DEFAULT_FPS = 6
 
@@ -125,9 +126,26 @@ def enable_dpi_awareness():
             pass
 
 
+CALIBRATE_STAGE_SECONDS = 20
+
+
+def make_stage_encoder(stage, file_bytes):
+    """按一档标定配置造一个 StreamEncoder。
+
+    **强制 M=None（即 M=∞，关闭系统性重发）**：标定口径是"seed 序列缺号 = 丢帧"，
+    §6.4.1 的系统性重发会主动复用已发过的 seed，一开就让缺号统计失去意义。
+    这条是硬约束，不继承用户 profile。
+    """
+    symbol = QRSymbolEncoder(ecc=stage['ecc'], box_size=stage['box_size'],
+                             border=STREAM_BORDER)
+    return StreamEncoder('calibration.bin', file_bytes, symbol_encoder=symbol,
+                         blocklen=stage['blocklen'], M=None)
+
+
 class PlayerWindow:
 
-    def __init__(self, encoder, fps=DEFAULT_FPS):
+    def __init__(self, encoder, fps=DEFAULT_FPS, stages=None, stage_seconds=None,
+                 stage_bytes=None):
         self.encoder = encoder
         self.interval = interval_ms_for_fps(fps)
         self.started_at = None
@@ -135,6 +153,17 @@ class PlayerWindow:
         self._photo = None          # 必须挂在长生命周期对象上，否则被 Tk 回收成空白
         self._stopping = False
         self._error = None
+        self.stages = list(stages or [])
+        self.stage_seconds = stage_seconds
+        self.stage_bytes = stage_bytes
+        self.stage_index = 0
+        self._stage_deadline = None
+        self._retiring = []          # 已 stop 但还没 join 的 encoder
+        if self.stages:
+            # 分档轮转要能造出下一档的 encoder，这两样缺一不可。
+            # 让它在构造时就炸，而不是等第一次换档时炸在 Tk 回调里。
+            assert self.stage_seconds and self.stage_bytes, \
+                "传了 stages 就必须同时给 stage_seconds 和 stage_bytes"
 
         self.root = tk.Tk()
         self.root.title("QueQiao 鹊桥 — 流式发送")
@@ -161,6 +190,11 @@ class PlayerWindow:
         self._after_id = None
         if self._stopping:
             return
+        if self._stage_deadline is not None and \
+                time.monotonic() >= self._stage_deadline:
+            self.advance_stage()
+            if self._stopping:
+                return
         try:
             frame = self.encoder.get_frame()
         except GeneratorError as e:
@@ -181,6 +215,26 @@ class PlayerWindow:
                 self.encoder.K,
             ))
         self._after_id = self.root.after(self.interval, self.tick)
+
+    def advance_stage(self):
+        """切到标定矩阵的下一档。
+
+        旧 encoder 只 stop 不 join——join 会阻塞 Tk 事件循环。它的生成线程
+        会在 PUT_TIMEOUT 内自己退出，统一留到 run() 的 finally 里收。
+        """
+        self.encoder.stop()
+        self._retiring.append(self.encoder)
+        self.stage_index += 1
+        if self.stage_index >= len(self.stages):
+            self.show_end()
+            return
+        stage = self.stages[self.stage_index]
+        self.encoder = make_stage_encoder(stage, self.stage_bytes)
+        self.encoder.start()
+        self._stage_deadline = time.monotonic() + self.stage_seconds
+        print("  [%d/%d] blocklen=%d ecc=%s box=%d → K=%d"
+              % (self.stage_index + 1, len(self.stages), stage['blocklen'],
+                 stage['ecc'], stage['box_size'], self.encoder.K))
 
     def show_end(self, error=None):
         """END 画面：红底大字 + 已发包数。不再调度 tick。"""
@@ -221,15 +275,19 @@ class PlayerWindow:
         except ValueError:
             pass                # 不在主线程时（不该发生），忽略
         self.started_at = time.monotonic()
+        if self.stages:
+            self._stage_deadline = time.monotonic() + self.stage_seconds
         self.encoder.start()
         self._after_id = self.root.after(0, self.tick)
         try:
             self.root.mainloop()
         finally:
-            # join 放在 mainloop 返回之后，不在 close 回调里
             self.encoder.stop()
-            if not self.encoder.join():
-                print("⚠️  生成线程未在超时内结束，放弃等待并继续退出。")
+            pending = self._retiring + [self.encoder]
+            for enc in pending:
+                enc.stop()
+                if not enc.join():
+                    print("⚠️  某个生成线程未在超时内结束，放弃等待并继续退出。")
         if self._error is not None:
             raise self._error
 
@@ -238,16 +296,63 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog='stream',
         description='QueQiao (鹊桥) v3: 流式喷泉码播放，配合 receive 使用')
-    parser.add_argument('input', help='要传输的文件')
-    parser.add_argument('--blocklen', type=int, default=DEFAULT_BLOCKLEN,
+    parser.add_argument('input', nargs='?', help='要传输的文件（--calibrate 时可省略）')
+    parser.add_argument('--blocklen', type=int, default=None,
                         help='每个源块的字节数 (默认: %d)' % DEFAULT_BLOCKLEN)
-    parser.add_argument('--ecc', choices=('L', 'M', 'Q', 'H'), default='M',
+    parser.add_argument('--ecc', choices=('L', 'M', 'Q', 'H'), default=None,
                         help='QR 纠错级别 (默认: M)')
-    parser.add_argument('--fps', type=float, default=DEFAULT_FPS,
+    parser.add_argument('--fps', type=float, default=None,
                         help='播放帧率 (默认: %d)' % DEFAULT_FPS)
-    parser.add_argument('--box-size', type=int, default=DEFAULT_BOX_SIZE,
+    parser.add_argument('--box-size', type=int, default=None,
                         help='每个模块的像素数 (默认: %d)' % DEFAULT_BOX_SIZE)
+    parser.add_argument('--calibrate', action='store_true',
+                        help='标定模式: 依次播放各档参数，配合 receive --calibrate 使用')
+    parser.add_argument('--stage-seconds', type=int, default=CALIBRATE_STAGE_SECONDS,
+                        help='标定时每档播放秒数 (默认: %d)' % CALIBRATE_STAGE_SECONDS)
     args = parser.parse_args(argv)
+
+    if args.calibrate:
+        enable_dpi_awareness()
+        data = synthetic_payload()
+        stages = CALIBRATION_MATRIX
+        print("=" * 60)
+        print("  QueQiao (鹊桥) - 标定模式")
+        print("=" * 60)
+        print("  合成载荷 %d 字节，共 %d 档，每档 %d 秒，总计约 %d 秒。"
+              % (len(data), len(stages), args.stage_seconds,
+                 len(stages) * args.stage_seconds))
+        print("  接收端现在就运行: ./run.sh receive --calibrate")
+        print("  系统性重发已强制关闭 (M=∞)，否则 seed 缺号统计不成立。")
+        print("=" * 60)
+        first = make_stage_encoder(stages[0], data)
+        print("  [1/%d] blocklen=%d ecc=%s box=%d → K=%d"
+              % (len(stages), stages[0]['blocklen'], stages[0]['ecc'],
+                 stages[0]['box_size'], first.K))
+        fps = args.fps if args.fps is not None else DEFAULT_FPS
+        win = PlayerWindow(first, fps=fps, stages=stages,
+                           stage_seconds=args.stage_seconds, stage_bytes=data)
+        win.run()
+        print("\n  标定播放结束。到接收端看报告。")
+        return 0
+
+    if args.input is None:
+        parser.error("需要指定输入文件（或用 --calibrate 进入标定模式）")
+
+    # 只有非标定路径读 profile。标定就是要**生成** profile，
+    # 继承上一次的结果会让基准随着每次标定漂移。
+    settings, source = load_profile()
+    if source == 'profile':
+        print("  使用标定结果: blocklen=%d ecc=%s fps=%g box=%d"
+              % (settings['blocklen'], settings['ecc'], settings['fps'],
+                 settings['box_size']))
+    if args.blocklen is None:
+        args.blocklen = settings['blocklen']
+    if args.ecc is None:
+        args.ecc = settings['ecc']
+    if args.fps is None:
+        args.fps = settings['fps']
+    if args.box_size is None:
+        args.box_size = settings['box_size']
 
     path = Path(args.input)
     if not path.is_file():

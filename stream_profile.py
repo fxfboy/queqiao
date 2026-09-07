@@ -119,3 +119,87 @@ def save_profile(settings, measurements=None):
     p.write_text(json.dumps(payload, ensure_ascii=True, indent=2),
                  encoding='utf-8')
     return p
+
+
+# ── 标定统计 ──────────────────────────────────────────────────
+
+MIN_ACCEPTABLE_RATE = 0.95
+
+
+class StageReport:
+    __slots__ = ('K', 'blocklen', 'packets', 'distinct_seeds', 'seed_span',
+                 'decode_rate', 'max_gap')
+
+    def __init__(self, K, blocklen, packets, distinct_seeds, seed_span,
+                 decode_rate, max_gap):
+        self.K = K
+        self.blocklen = blocklen
+        self.packets = packets
+        self.distinct_seeds = distinct_seeds
+        self.seed_span = seed_span
+        self.decode_rate = decode_rate
+        self.max_gap = max_gap
+
+    def line(self):
+        return ("blocklen=%-5d K=%-5d 收到 %-5d 包 │ 单帧解出率 %6.2f%% │ 最长连丢 %d"
+                % (self.blocklen, self.K, self.packets,
+                   self.decode_rate * 100, self.max_gap))
+
+
+class CalibrationCollector:
+    """按 (K, blocklen) 分档收 seed，用缺号推单帧解出率。
+
+    口径成立的两个前提由 §7.4 强制保证：标定时 M=∞（无系统性重发，seed 不复用）
+    且 K ≥ 64（系统性阶段占比小）。此时线上 seed 是严格单调的包序号，
+    "缺号"与"那一帧没解出来"一一对应。
+    """
+
+    def __init__(self):
+        self._stages = {}          # (K, blocklen) -> set[seed]
+
+    def feed(self, raw):
+        """返回是否计入统计。非本协议 / 坏包一律 False，不抛。"""
+        from stream_packet import PacketError, unpack_packet
+        try:
+            pkt = unpack_packet(raw)
+        except PacketError:
+            return False
+        except Exception:
+            return False
+        if pkt is None:
+            return False
+        self._stages.setdefault((pkt.K, pkt.blocklen), set()).add(pkt.seed)
+        return True
+
+    def report(self):
+        out = []
+        for (K, blocklen), seeds in sorted(self._stages.items(),
+                                           key=lambda kv: kv[0][1]):
+            if not seeds:
+                continue
+            lo, hi = min(seeds), max(seeds)
+            span = hi - lo + 1
+            gap = 0
+            run = 0
+            for s in range(lo, hi + 1):
+                if s in seeds:
+                    run = 0
+                else:
+                    run += 1
+                    if run > gap:
+                        gap = run
+            out.append(StageReport(K, blocklen, len(seeds), len(seeds),
+                                   span, len(seeds) / span, gap))
+        return out
+
+    def best(self, matrix):
+        """达标档里取 blocklen 最大的那个对应的矩阵配置；无达标档返回 None。"""
+        by_len = {s['blocklen']: s for s in matrix}
+        passing = [r for r in self.report()
+                   if r.decode_rate >= MIN_ACCEPTABLE_RATE
+                   and r.blocklen in by_len]
+        if not passing:
+            return None
+        winner = max(passing, key=lambda r: r.blocklen)
+        return dict(by_len[winner.blocklen])
+
