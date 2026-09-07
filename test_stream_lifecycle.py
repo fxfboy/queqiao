@@ -200,6 +200,79 @@ def test_generation_actually_renders_once_at_startup():
     print("  ✅ PASSED")
 
 
+def test_interval_ms_for_fps():
+    print("[TEST] 帧率 → 毫秒节拍...")
+    from player import interval_ms_for_fps
+    assert interval_ms_for_fps(6) == 167, "§7.3 的初始默认 6 fps 必须是 167 ms"
+    assert interval_ms_for_fps(1) == 1000
+    assert interval_ms_for_fps(60) == 17
+    assert interval_ms_for_fps(10000) >= 1, "节拍不得为 0，否则 after 会退化成忙循环"
+    for bad in (0, -1, -0.5):
+        try:
+            interval_ms_for_fps(bad)
+        except ValueError:
+            continue
+        raise AssertionError("fps=%r 应被拒绝" % (bad,))
+    print("  ✅ PASSED")
+
+
+def test_fit_box_size():
+    print("[TEST] 整数倍缩放：不让任何一层做非整数缩放（§7.2）...")
+    from player import STREAM_BORDER, fit_box_size
+    # v40 是 177 模块；加 4 模块 quiet zone × 2 边 = 185
+    assert fit_box_size(177, 1080) == 1080 // 185
+    assert fit_box_size(177, 1080) * 185 <= 1080, "缩放后不得超出屏幕"
+    assert (fit_box_size(177, 1080) + 1) * 185 > 1080, "必须取最大的整数倍"
+    assert fit_box_size(21, 1080, border=STREAM_BORDER) == 1080 // 29
+    try:
+        fit_box_size(177, 100)          # 屏幕比码还小
+    except ValueError as e:
+        assert '屏幕' in str(e) or 'box_size' in str(e)
+    else:
+        raise AssertionError("屏幕装不下时必须报错，而不是返回 0 让 PIL 崩")
+    print("  ✅ PASSED")
+
+
+def test_format_status():
+    print("[TEST] 状态行是纯函数...")
+    from player import format_status
+    s = format_status(120, 20.0, K=40)
+    assert '120' in s and '40' in s
+    assert '6.0' in s, "应显示实际帧率 120/20.0 = 6.0"
+    assert format_status(0, 0.0, K=40), "零耗时不得除零"
+    print("  ✅ PASSED")
+
+
+def test_image_to_tk_data_is_base64_png():
+    print("[TEST] 帧图转 Tk 可吃的 base64 PNG（不走 PIL.ImageTk）...")
+    import base64
+    from PIL import Image
+    from player import image_to_tk_data
+    data = image_to_tk_data(Image.new('RGB', (64, 64), 'white'))
+    assert isinstance(data, bytes), "tk.PhotoImage(data=) 收 bytes 或 str"
+    raw = base64.b64decode(data)
+    assert raw[:8] == b'\x89PNG\r\n\x1a\n', "必须是 PNG；Tk 8.6 认 PNG，不认 PIL 写的 P6 PPM"
+    print("  ✅ PASSED")
+
+
+def test_ensure_tcl_env_is_idempotent_and_safe():
+    print("[TEST] TCL_LIBRARY 修补幂等且不误伤...")
+    import os
+    from player import ensure_tcl_env
+    saved = os.environ.get('TCL_LIBRARY')
+    try:
+        # 已设值时必须原样不动——用户/run.sh 显式指定的路径优先级最高
+        os.environ['TCL_LIBRARY'] = '/nonexistent/sentinel'
+        assert ensure_tcl_env() is None, "已有 TCL_LIBRARY 时不得覆盖"
+        assert os.environ['TCL_LIBRARY'] == '/nonexistent/sentinel'
+    finally:
+        if saved is None:
+            os.environ.pop('TCL_LIBRARY', None)
+        else:
+            os.environ['TCL_LIBRARY'] = saved
+    print("  ✅ PASSED")
+
+
 if __name__ == '__main__':
     test_start_and_consume()
     test_stop_while_queue_full_does_not_deadlock()
@@ -210,4 +283,9 @@ if __name__ == '__main__':
     test_start_rejects_oversized_blocklen()
     test_start_rejects_oversized_file()
     test_generation_actually_renders_once_at_startup()
+    test_interval_ms_for_fps()
+    test_fit_box_size()
+    test_format_status()
+    test_image_to_tk_data_is_base64_png()
+    test_ensure_tcl_env_is_idempotent_and_safe()
     print("\n✅ All lifecycle tests passed!")
