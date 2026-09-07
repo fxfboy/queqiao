@@ -98,8 +98,17 @@ class StreamEncoder:
     def start(self):
         if self._thread is not None:
             return
+        # daemon=True 是 join(timeout) 能兑现承诺的**前提**，不是图省事。
+        # 正常路径上 join() 会等到线程自己退出，daemon 标志毫无影响；
+        # 只有 join 超时放弃（④）那条路上它才起作用：非 daemon 线程会被
+        # 解释器在退出时无条件 join，于是"放弃等待继续退出流程"实际变成
+        # "进程永不退出，只能外部强杀"——恰好与它要防的事情相反。
+        # 已复现：把 encode() 换成不可中断的阻塞（qrcode/PIL 卡死、JAB writer
+        # 子进程无超时），daemon=False 时主逻辑结束后进程再也退不出去。
+        # 生成线程只往队列里放 PIL 图，不写文件、不持有外部资源，
+        # 被解释器直接丢弃是安全的。
         self._thread = threading.Thread(
-            target=self._generate, name='queqiao-generator', daemon=False)
+            target=self._generate, name='queqiao-generator', daemon=True)
         self._thread.start()
 
     def _offer(self, item):

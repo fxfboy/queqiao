@@ -5,6 +5,7 @@
 这个文件就是那五点各自的回归用例。
 """
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -151,6 +152,67 @@ def test_join_timeout_gives_up_and_reports():
     print("  ✅ PASSED")
 
 
+# 子进程脚本：生成线程永久卡在 encode() 里，join 超时放弃后主逻辑正常结束。
+# 探测渲染（__init__ 里那次）必须放过去，否则卡的是构造函数，验的不是同一件事。
+_HANG_SCRIPT = r'''
+import sys, time
+sys.path.insert(0, %r)
+from stream_encoder import StreamEncoder
+
+
+class _Img:
+    def close(self):
+        pass
+
+
+class ProbeThenBlock:
+    def __init__(self):
+        self.calls = 0
+
+    def check_capacity(self, blocklen):
+        return True
+
+    def encode(self, raw):
+        self.calls += 1
+        if self.calls == 1:
+            return _Img()
+        time.sleep(3600)
+
+
+se = StreamEncoder('x.bin', b'A' * 4000,
+                   symbol_encoder=ProbeThenBlock(), blocklen=800)
+se.start()
+time.sleep(0.5)
+se.stop()
+assert se.join(timeout=0.3) is False
+'''
+
+
+def test_stuck_generator_does_not_block_process_exit():
+    """④ 的后半句：放弃等待之后进程必须**真的能退出**。
+
+    上一个用例只验了 join 立即返回。它测不到真正的危险：生成线程若不是
+    daemon，解释器退出时会无条件 join 它，"放弃等待继续退出流程"就变成
+    "进程永不退出，只能外部强杀"。这只能在子进程里验——本进程一旦复现
+    就再也退不出来，测试自己会挂死。
+    """
+    print("[TEST] ④ 生成线程卡死时进程仍能退出...")
+    repo = os.path.dirname(os.path.abspath(__file__))
+    p = subprocess.Popen([sys.executable, '-c', _HANG_SCRIPT % repo],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, errors='replace')
+    try:
+        out = p.communicate(timeout=20)[0]
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate(timeout=10)
+        raise AssertionError(
+            "主逻辑已结束但进程 20s 未退出——生成线程被解释器无条件 join 了，"
+            "检查 StreamEncoder.start() 的 daemon 标志")
+    assert p.returncode == 0, "子进程退出码 %r，输出:\n%s" % (p.returncode, out)
+    print("  ✅ PASSED")
+
+
 def test_repeated_stop_and_join_are_idempotent():
     print("[TEST] 重复 stop / join 幂等...")
     se = make()
@@ -279,6 +341,7 @@ if __name__ == '__main__':
     test_generator_exception_reaches_main_thread_with_full_queue()
     test_drain_tolerates_producer_race()
     test_join_timeout_gives_up_and_reports()
+    test_stuck_generator_does_not_block_process_exit()
     test_repeated_stop_and_join_are_idempotent()
     test_start_rejects_oversized_blocklen()
     test_start_rejects_oversized_file()
