@@ -8,6 +8,7 @@ dependencies = [
     "Pillow",
     "pyzbar",
     "zxing-cpp",
+    "mss>=10.2.0",
 ]
 
 [tool.uv]

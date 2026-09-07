@@ -37,6 +37,10 @@ if "%1"=="decode" goto :decode
 if "%1"=="d" goto :decode
 if "%1"=="test" goto :test
 if "%1"=="t" goto :test
+if "%1"=="stream" goto :stream
+if "%1"=="s" goto :stream
+if "%1"=="receive" goto :receive
+if "%1"=="r" goto :receive
 if "%1"=="verify" goto :verify
 if "%1"=="v" goto :verify
 goto :help
@@ -94,6 +98,26 @@ if "%1"=="" (
 uv run python "%SCRIPT_DIR%decoder.py" %*
 goto :end
 
+:stream
+shift
+if "%1"=="" (
+    echo 用法: run.bat stream ^<文件^> [选项]
+    echo.
+    echo 选项:
+    echo   --blocklen N         每个源块的字节数 (默认: 800^)
+    echo   --ecc L^|M^|Q^|H        QR 纠错级别 (默认: M^)
+    echo   --fps N              播放帧率 (默认: 6^)
+    echo   --box-size N         每模块像素数 (默认: 6^)
+    exit /b 1
+)
+uv run python "%SCRIPT_DIR%player.py" %*
+goto :end
+
+:receive
+shift
+uv run python "%SCRIPT_DIR%stream_decoder.py" %*
+goto :end
+
 :test
 uv run python "%SCRIPT_DIR%test_roundtrip.py"
 goto :end
@@ -110,6 +134,8 @@ echo.
 echo 用法:
 echo   run.bat encode ^<输入文件^> [--chunk-size N]  # 把文件编码成二维码 HTML
 echo   run.bat decode ^<照片/目录...^>         # 从照片还原文件
+echo   run.bat stream ^<输入文件^>             # v3: 循环播放喷泉码窗口
+echo   run.bat receive [--screen] [-o FILE]  # v3: 圈选屏幕区域接收
 echo   run.bat diff ^<基准目录^> ^<目标目录^>   # (可选) 生成目录 diff 文件
 echo   run.bat test                          # 运行测试
 echo   run.bat verify                        # 验证完整往返

@@ -156,6 +156,29 @@ main() {
             run_py "$SCRIPT_DIR/decoder.py" "$@"
             ;;
 
+        stream|s)
+            shift
+            if [ $# -lt 1 ]; then
+                echo "用法: ./run.sh stream <文件> [选项]"
+                echo ""
+                echo "选项:"
+                echo "  --blocklen N         每个源块的字节数 (默认: 800)"
+                echo "  --ecc L|M|Q|H        QR 纠错级别 (默认: M)"
+                echo "  --fps N              播放帧率 (默认: 6)"
+                echo "  --box-size N         每模块像素数 (默认: 6)"
+                echo ""
+                echo "打开一个循环播放喷泉码的窗口，直到你按 Esc 停止。"
+                echo "接收端用 ./run.sh receive 圈选这个窗口。"
+                exit 1
+            fi
+            run_py "$SCRIPT_DIR/player.py" "$@"
+            ;;
+
+        receive|r)
+            shift
+            run_py "$SCRIPT_DIR/stream_decoder.py" "$@"
+            ;;
+
         test|t)
             run_py "$SCRIPT_DIR/test_roundtrip.py"
             ;;
@@ -172,6 +195,8 @@ main() {
             echo "用法:"
             echo "  ./run.sh encode <输入文件> [--chunk-size N]  # 把文件编码成二维码 HTML"
             echo "  ./run.sh decode <照片/目录...>         # 从照片还原文件"
+            echo "  ./run.sh stream <输入文件>             # v3: 循环播放喷泉码窗口"
+            echo "  ./run.sh receive [--screen] [-o FILE]  # v3: 圈选屏幕区域接收"
             echo "  ./run.sh diff <基准目录> <目标目录>    # (可选) 生成目录 diff 文件"
             echo "  ./run.sh test                          # 运行测试"
             echo "  ./run.sh verify                        # 验证完整往返"
