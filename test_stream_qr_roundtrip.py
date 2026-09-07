@@ -123,6 +123,62 @@ def test_encoder_chunk_to_qr_image_default_unchanged():
     print("  ✅ PASSED")
 
 
+def test_all_zero_payload_survives_qrcode():
+    print("[TEST] 全零载荷不触发 qrcode 的 glog(0)...")
+    import zxingcpp
+    # qrcode 8.2 的 numeric 模式把 '000' 编成 10 bit 全零，长 '0' 串会让某个 RS
+    # 块的数据码字整块为零，库内部 glog(0) 崩溃。而 base85 把 4 个 \x00 编成
+    # '00000'——流式分块用 \x00 补齐末块，"文件远小于 blocklen"这一最常见场景
+    # 必然产生长 '0' 串。encoder 显式指定 byte 模式绕开整条 numeric 路径。
+    # 没有这个测试，该缺陷只有在真机播放一个小文件时才会炸。
+    enc = QRSymbolEncoder()
+    for n in (200, 509, 800, 1848):
+        payload = b'\x00' * n
+        img = enc.encode(payload)              # 修复前这里抛 ValueError: glog(0)
+        found = zxingcpp.read_barcodes(img, formats=zxingcpp.BarcodeFormat.QRCode)
+        assert len(found) == 1, "全零载荷 %d 字节应读出 1 个 QR，实得 %d" % (n, len(found))
+        b85 = bytes(found[0].bytes) if found[0].bytes else found[0].text.encode('ascii')
+        assert base64.b85decode(b85) == payload, "全零载荷 %d 字节未能原样还原" % n
+    print("  ✅ PASSED")
+
+
+def test_all_zero_payload_at_capacity_ceiling():
+    print("[TEST] 满包全零仍在 v40 容量内（byte 模式最坏情况）...")
+    # max_raw_for_base85(2331) == 1864，即 v40-M 的极限。全零是 base85 输出最长的
+    # 情形之一，1864 字节恰好编成 2330 个字符，只剩 1 字符余量——容量公式是按
+    # byte 模式算的，强制 byte 模式后模型与实际编码行为才真正自洽。
+    enc = QRSymbolEncoder()                     # max_payload_bytes = 1864
+    payload = b'\x00' * enc.max_payload_bytes
+    assert len(base64.b85encode(payload)) <= QR_V40_BYTE_CAPACITY['M'], \
+        "全零满包的 base85 输出超出 v40-M 容量，容量公式与实际编码模式不一致"
+    enc.encode(payload)                         # 装不下会抛 DataOverflowError
+    print("  ✅ PASSED")
+
+
+def test_forcing_byte_mode_leaves_v1v2_images_identical():
+    print("[TEST] 强制 byte 模式不改变 v1/v2 的正常载荷图像...")
+    import os
+    import qrcode as _qrcode
+    import encoder as v12_encoder
+    # base85 字符集含大小写字母和符号，随机载荷里出现 20 个连续数字的概率约 1e-18，
+    # 所以正常载荷本来就走 byte 模式，显式指定后位流应当逐位相同。这条断言是
+    # "修复不破坏 v1/v2 已生成 HTML"的依据；若哪天它红了，说明 v1/v2 的产物变了。
+    for n in (400, 800, 1200):
+        payload = os.urandom(n)
+        b85 = base64.b85encode(payload).decode('ascii')
+        auto = _qrcode.QRCode(version=None, box_size=5, border=2,
+                              error_correction=_qrcode.constants.ERROR_CORRECT_M)
+        auto.add_data(b85)                      # 库自动选模式（修复前的行为）
+        auto.make(fit=True)
+        auto_img = auto.make_image(fill_color="black", back_color="white")
+        forced = v12_encoder.chunk_to_qr_image(payload)
+        ia = (auto_img.get_image() if hasattr(auto_img, 'get_image') else auto_img).convert('L')
+        ib = (forced.get_image() if hasattr(forced, 'get_image') else forced).convert('L')
+        assert ia.tobytes() == ib.tobytes(), \
+            "%d 字节随机载荷：显式 byte 模式改变了图像，v1/v2 的 HTML 会变" % n
+    print("  ✅ PASSED")
+
+
 def test_backend_accepts_path_and_pil_image():
     print("[TEST] backend 的 decode_image 同时接受路径和 PIL Image...")
     import tempfile
@@ -200,6 +256,9 @@ if __name__ == '__main__':
     test_encode_does_not_double_base85()
     test_ecc_levels_change_output()
     test_encoder_chunk_to_qr_image_default_unchanged()
+    test_all_zero_payload_survives_qrcode()
+    test_all_zero_payload_at_capacity_ceiling()
+    test_forcing_byte_mode_leaves_v1v2_images_identical()
     test_backend_accepts_path_and_pil_image()
     test_backend_does_not_close_borrowed_image()
     test_backend_closes_its_own_file_handles()

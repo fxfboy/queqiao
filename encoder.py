@@ -22,6 +22,7 @@ from pathlib import Path
 from io import BytesIO
 
 import qrcode
+from qrcode.util import QRData, MODE_8BIT_BYTE
 
 from jabcode_cli import find_executable, run_writer
 
@@ -114,7 +115,26 @@ def chunk_to_qr_image(payload, box_size=5, border=2, ecc=None):
         box_size=box_size,
         border=border,
     )
-    qr.add_data(b85)
+    # 必须显式指定 byte 模式，不能让 qrcode 自己挑（默认 optimize=20 会做混合
+    # 模式优化，即使 optimize=0，QRData 的 check_data 也会自动识别）。
+    #
+    # qrcode 8.2 有一个真实缺陷：numeric 模式把每 3 个数字编成 10 bit，'000'
+    # 编出来是 10 bit 全零。载荷里出现足够长的 '0' 串时，某个 RS 块的数据码字
+    # 整块为零，库内部 Polynomial.__init__ 剥掉前导零后退化成零多项式，
+    # RS 除法取 glog(self[0]) 就撞上 glog(0)，抛 ValueError。实测 '0'*150 尚可
+    # （尾部还跟着 0xEC/0x11 填充字节），'0'*200 起必崩，换 version 和 ECC 都躲不掉。
+    # 注意触发条件是字符 '0' 而不是"纯数字"——'1'*300 和 '0123456789'*30 都正常。
+    #
+    # 这对本项目不是边角情况：流式分块用 \x00 补齐末块，而 base85 把 4 个 \x00
+    # 编成 '00000'，所以"文件远小于 blocklen"这一最常见场景必然产生长 '0' 串。
+    #
+    # 强制 byte 模式绕开整条 numeric 路径：base85 的字符全是可打印 ASCII（>= 0x21），
+    # 数据码字不可能整块为零。代价为零——base85 字符集含大小写字母和符号，正常
+    # 载荷本来就走 byte 模式，实测 30 个随机载荷修复前后图像逐位相同，v1/v2 的
+    # HTML 不受影响。反而顺带修正了一处隐患：symbol_encoder 的容量模型
+    # （QR_V40_BYTE_CAPACITY + max_raw_for_base85）一直是按 byte 模式算的，
+    # 之前库若偷偷改用别的模式，算出来的容量就和实际编码行为脱节了。
+    qr.add_data(QRData(b85.encode('ascii'), mode=MODE_8BIT_BYTE, check_data=False))
     qr.make(fit=True)
 
     return qr.make_image(fill_color="black", back_color="white")
