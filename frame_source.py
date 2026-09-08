@@ -223,16 +223,41 @@ def select_region(prompt=None):
         if state['rect'] is not None:
             canvas.coords(state['rect'], state['x0'], state['y0'], e.x, e.y)
 
+    def finish():
+        """先把遮罩从屏幕上撤下来，再销毁窗口对象。
+
+        **为什么必须 withdraw 在前**：macOS Tk（8.6.14 实测）上 destroy() 的
+        原生 NSWindow teardown 依赖事件循环冲刷。mainloop 一返回，调用方
+        （stream_decoder 的帧循环）立刻扎进 mss+zxing 死循环、不再处理任何
+        事件——一旦 destroy 的 teardown 在哪种真实鼠标时序下被跳过，28% 透明
+        的遮罩就永远钉在屏幕上：拦住全部点击、进程被标成"未响应"（彩虹球），
+        只能强退（2026-09-08 用户连续复现，取证见 CGWindowList：主线程已在
+        帧循环、遮罩窗口仍在屏）。withdraw 是同步的 orderOut，不依赖后续
+        事件循环，先撤屏再销毁，幽灵在构造上不可能出现。
+        """
+        try:
+            root.wm_withdraw()
+        except tk.TclError:
+            pass
+        root.destroy()
+
     def on_release(e):
         left, top = min(state['x0'], e.x), min(state['y0'], e.y)
         state['result'] = (left, top, abs(e.x - state['x0']), abs(e.y - state['y0']))
-        root.destroy()
+        finish()
 
     canvas.bind('<ButtonPress-1>', on_press)
     canvas.bind('<B1-Motion>', on_drag)
     canvas.bind('<ButtonRelease-1>', on_release)
-    root.bind('<Escape>', lambda _e: root.destroy())
+    root.bind('<Escape>', lambda _e: finish())
     root.mainloop()
+
+    # 兜底：mainloop 退出后把 destroy 可能遗留的原生 teardown 冲完。
+    # destroy 之后 Tk 对象已死，update() 抛 TclError 属正常，吞掉即可。
+    try:
+        root.update()
+    except tk.TclError:
+        pass
 
     if state['result'] is None:
         return None
