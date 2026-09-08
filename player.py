@@ -158,6 +158,7 @@ class PlayerWindow:
         self.stage_bytes = stage_bytes
         self.stage_index = 0
         self._stage_deadline = None
+        self._positioned = False    # 首帧后把窗口钳回屏幕内，只做一次
         self._retiring = []          # 已 stop 但还没 join 的 encoder
         if self.stages:
             # 分档轮转要能造出下一档的 encoder，这两样缺一不可。
@@ -168,6 +169,10 @@ class PlayerWindow:
         self.root = tk.Tk()
         self.root.title("QueQiao 鹊桥 — 流式发送")
         self.root.configure(bg='white')
+        # 发送窗必须始终可见——接收端抓的就是这块屏幕区域，被别的窗口
+        # 压住后收端只会"连续 N 帧非黑但解不出任何码"（同 frame_source
+        # 圈选遮罩的 -topmost 用法）。
+        self.root.attributes('-topmost', True)
         self.root.resizable(False, False)
         self.label = tk.Label(self.root, bg='white', bd=0, highlightthickness=0)
         self.label.pack()
@@ -209,12 +214,35 @@ class PlayerWindow:
             finally:
                 frame.image.close()     # FrameSource/Frame 的所有权在调用方
             self.label.configure(image=self._photo)
+            if not self._positioned:
+                self._positioned = True
+                self.clamp_onto_screen()
             self.status.configure(text=format_status(
                 self.encoder.packets_sent,
                 time.monotonic() - self.started_at,
                 self.encoder.K,
             ))
         self._after_id = self.root.after(self.interval, self.tick)
+
+    def clamp_onto_screen(self):
+        """窗口必须完整落在屏幕内：屏幕合成器不渲染屏幕外像素，抓屏抓到
+        的 QR 右侧会缺一条白边，接收端一帧都解不出（2026-09-08 实测：
+        窗口悬出 51px，4.8 fps 播了上千帧无一解出）。tkinter 的默认摆放
+        位置不保证不出屏，所以首帧显示后按真实窗口尺寸钳一次。
+        """
+        self.root.update_idletasks()
+        ww, wh = self.root.winfo_width(), self.root.winfo_height()
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        if ww > sw or wh > sh:
+            print("⚠️  播放窗 %dx%d 比屏幕 %dx%d 还大，屏幕装不下这个码。"
+                  "请调小 --box-size 或 --blocklen。" % (ww, wh, sw, sh))
+            return
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        nx = min(max(0, x), sw - ww)
+        ny = min(max(0, y), sh - wh)
+        if (nx, ny) != (x, y):
+            self.root.geometry('+%d+%d' % (nx, ny))
+            print("  窗口原在 (%d,%d) 会悬出屏幕，已移到 (%d,%d)。" % (x, y, nx, ny))
 
     def advance_stage(self):
         """切到标定矩阵的下一档。

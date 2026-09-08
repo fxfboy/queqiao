@@ -78,6 +78,8 @@ def receive_stream(source, session, backend, on_event=None):
     no_code_warned = False
     last_solved = 0
     last_progress_at = time.monotonic()
+    frames = 0
+    last_heartbeat = time.monotonic()
 
     for image in source:
         try:
@@ -113,6 +115,15 @@ def receive_stream(source, session, backend, on_event=None):
                 on_event(session, event, raw)
         finally:
             image.close()       # §8.1：帧的所有权在我们手里，必须关
+
+        # 心跳：每 5 秒报一次"还活着、抓了多少帧"。进度行只在解出包时打印，
+        # 一个码都解不出时（窗口悬出屏幕/被遮挡/区域偏了）终端会长时间静默，
+        # 看起来像卡死——2026-09-08 用户因此 Force Quit 过一次。
+        frames += 1
+        if time.monotonic() - last_heartbeat >= 5.0:
+            last_heartbeat = time.monotonic()
+            print("\r  已抓 %d 帧 │ %s" % (frames, session.stats.summary()),
+                  end='', flush=True)
 
         if session.solved_count != last_solved:
             last_solved = session.solved_count
