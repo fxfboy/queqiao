@@ -160,12 +160,42 @@ class ScreenSource(FrameSource):
 
 # ── 圈选（GUI，不做自动化测试） ────────────────────────────────
 
+def ensure_tcl_env():
+    """uv 装的 python-build-standalone 把 tcl8.6 打包在 sys.base_prefix/lib 下，
+    venv 的 sys.prefix 下没有，而 Tk 按 sys.prefix 找 init.tcl——于是
+    `import tkinter` 后第一次建窗口就抛 `Can't find a usable init.tcl`。
+    player.py 里有一份带完整推导注释的同款修复；接收端的圈选窗同样需要。
+    """
+    import os
+    import sys
+
+    if os.environ.get('TCL_LIBRARY'):
+        return
+    base = getattr(sys, 'base_prefix', sys.prefix)
+    if base == sys.prefix:
+        return
+    for ver in ('8.6', '8.5'):
+        tcl = os.path.join(base, 'lib', 'tcl' + ver)
+        if os.path.exists(os.path.join(tcl, 'init.tcl')):
+            os.environ['TCL_LIBRARY'] = tcl
+            tk_dir = os.path.join(base, 'lib', 'tk' + ver)
+            if os.path.isdir(tk_dir):
+                os.environ['TK_LIBRARY'] = tk_dir
+            return
+
+
 def select_region(prompt=None):
     """全屏半透明覆盖层上拖框选区。返回**物理像素** bbox，取消返回 None。"""
+    ensure_tcl_env()
     import tkinter as tk
 
     root = tk.Tk()
-    root.attributes('-fullscreen', True)
+    # 不用 attributes('-fullscreen')：macOS 上原生全屏会开一个独立 Space，
+    # 遮罩自己独占一屏，要圈选的播放窗反而看不见。改成铺满屏幕尺寸的
+    # 普通置顶窗口，效果一样但不进 Space。
+    tk_w = root.winfo_screenwidth()
+    tk_h = root.winfo_screenheight()
+    root.geometry("%dx%d+0+0" % (tk_w, tk_h))
     try:
         root.attributes('-alpha', 0.28)
     except tk.TclError:
@@ -173,9 +203,6 @@ def select_region(prompt=None):
     root.configure(bg='black')
     root.attributes('-topmost', True)
     root.config(cursor='crosshair')
-
-    tk_w = root.winfo_screenwidth()
-    tk_h = root.winfo_screenheight()
 
     canvas = tk.Canvas(root, bg='black', highlightthickness=0)
     canvas.pack(fill='both', expand=True)
