@@ -32,17 +32,26 @@ QueQiao（鹊桥）是在两个物理隔离、没有网络路径的世界之间�
     逐字节还原出原始文件
 ```
 
-## 安装依赖
+## 安装
 
-依赖由 `pyproject.toml` 声明，用 [uv](https://docs.astral.sh/uv/) 管理。首次运行 `./run.sh`（或 `run.bat`）会自动创建 `.venv` 并 `uv sync` 同步依赖。手动安装：
+**方式一：独立安装（推荐，无需本仓库）**
+
+```bash
+pipx install queqiao[pyzbar]      # 或 pip install queqiao[pyzbar]
+queqiao --help                    # 统一入口，五个子命令
+# pyzbar 需要本地 zbar 库：
+#   macOS:  brew install zbar     （并 export DYLD_LIBRARY_PATH=/opt/homebrew/lib）
+#   Ubuntu: sudo apt-get install libzbar0
+#   Windows: 安装 Visual C++ Redistributable
+```
+
+**方式二：克隆仓库开发运行**
+
+依赖由 `pyproject.toml` 声明，用 [uv](https://docs.astral.sh/uv/) 管理。首次运行 `./run.sh`（或 `run.bat`）会自动创建 `.venv` 并 `uv sync --extra pyzbar` 同步依赖（仓库源码以 editable 方式安装）。手动安装：
 
 ```bash
 # 先装 uv：curl -LsSf https://astral.sh/uv/install.sh | sh   （或 brew install uv）
-uv sync                            # 创建 .venv 并安装依赖
-# pyzbar 需要本地 zbar 库：
-#   macOS:  brew install zbar
-#   Ubuntu: sudo apt-get install libzbar0
-#   Windows: 安装 Visual C++ Redistributable
+uv sync --extra pyzbar            # 创建 .venv 并安装依赖
 ```
 
 JAB Code 是可选 backend，使用其官方 C 参考实现。分别构建
@@ -54,6 +63,10 @@ JAB Code 是可选 backend，使用其官方 C 参考实现。分别构建
 `./run.sh` 会在首次创建虚拟环境时尽力自动安装 zbar（macOS 使用 Homebrew，Linux 使用 apt/yum）。如果系统包管理器不可用或安装失败，可以按上面的命令手动安装；不想装 zbar 也行——默认后端 `zxing` 是纯 wheel，开箱即用。
 
 ## 使用方法
+
+### 使用入口说明
+
+下面所有示例用 `./run.sh <子命令>`（仓库内开发运行，Windows 用 `run.bat`）。独立安装的用户把 `./run.sh` 换成 `queqiao` 即可，例如 `queqiao encode input.txt -o qr.html`。
 
 ### 编码端（内网）—— 文件 → 二维码 HTML
 
@@ -94,7 +107,7 @@ JAB 默认使用 `chunk-size=3000`、单列 900px 展示、8 色和纠错级别 
 ./run.sh decode photos_dir -o my_output.bin
 ```
 
-`decoder.py` 默认使用 zxing-cpp 检测二维码（纯 wheel、无系统库依赖，pixel-perfect 场景比 pyzbar 快约 10×）。如果想用 pyzbar 后端：
+`queqiao decode` 默认使用 zxing-cpp 检测二维码（纯 wheel、无系统库依赖，pixel-perfect 场景比 pyzbar 快约 10×）。如果想用 pyzbar 后端：
 
 ```bash
 ./run.sh decode photos_dir --backend pyzbar
@@ -130,14 +143,14 @@ cd /path/to/repo && patch -p1 < restored.out
 `make_diff.py` 支持文件过滤：
 
 ```bash
-uv run python make_diff.py /ext /int --ext .py .ts     # 只对比指定扩展名
-uv run python make_diff.py /ext /int --no-gitignore    # 不读取 .gitignore
-uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模式
+uv run python -m queqiao.make_diff /ext /int --ext .py .ts     # 只对比指定扩展名
+uv run python -m queqiao.make_diff /ext /int --no-gitignore    # 不读取 .gitignore
+uv run python -m queqiao.make_diff /ext /int --ignore "*.log" "tmp"  # 额外忽略模式
 ```
 
 ## 参数
 
-### encoder.py
+### queqiao encode
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `input` | - | 要传输的输入文件（任意文件） |
@@ -151,7 +164,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 | `--jab-ecc-level` | `3` | JAB Code 纠错级别 1-10 |
 | `--no-open` | - | 生成后不自动打开浏览器 |
 
-### decoder.py
+### queqiao decode
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `images` | - | 照片文件或目录（可多个） |
@@ -159,7 +172,7 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 | `--backend` | `zxing` | `zxing` / `pyzbar`（QR）或 `jab`（JAB Code） |
 | `--debug` | - | 显示调试信息 |
 
-### make_diff.py（可选）
+### queqiao diff（可选）
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `dir1` | - | 基准目录（外网仓库） |
@@ -181,23 +194,24 @@ uv run python make_diff.py /ext /int --ignore "*.log" "tmp"  # 额外忽略模�
 ## 测试
 
 ```bash
-./run.sh test        # test_roundtrip.py —— 纯逻辑字节往返
-./run.sh verify      # verify_full.py —— 真·渲染+pyzbar 解码往返
-uv run python test_make_diff.py       # make_diff 目录对比
-uv run python test_cli.py             # CLI 子进程冒烟测试；含 pyzbar 用例，需可用 zbar
-uv run python test_jab_backend.py     # JAB CLI 适配层测试（用模拟原生工具）
+./run.sh test        # tests/test_roundtrip.py —— 纯逻辑字节往返
+./run.sh verify      # tests/verify_full.py —— 真·渲染+pyzbar 解码往返
+uv run python tests/test_jab_backend.py # JAB CLI 适配层测试（用模拟原生工具）
+uv run python tests/run_all.py        # 顺序跑完全部测试套件（推荐）
+uv run python tests/test_cli.py       # CLI 子进程冒烟测试；含 pyzbar 用例，需可用 zbar
+uv run python tests/test_make_diff.py # make_diff 目录对比
 ```
 
 ## 扩展：新增二维码解码后端
 
-所有解码后端都在 `qr_backends/` 目录下，每个后端是一个独立模块，注册在 `qr_backends/__init__.py` 的 `_REGISTRY` 里。`decoder.py` 只通过 `get_backend(name)` / `available_backends()` / `DEFAULT_BACKEND` 这三个 API 访问注册表，不感知具体后端。
+所有解码后端都在 `src/queqiao/qr_backends/` 目录下，每个后端是一个独立模块，注册在 `qr_backends/__init__.py` 的 `_REGISTRY` 里。`queqiao decode` 只通过 `get_backend(name)` / `available_backends()` / `DEFAULT_BACKEND` 这三个 API 访问注册表，不感知具体后端。
 
 加一个新后端两步：
 
-**1. 新建 `qr_backends/<name>_backend.py`**，继承 `QRDecoderAdapter`：
+**1. 新建 `src/queqiao/qr_backends/<name>_backend.py`**，继承 `QRDecoderAdapter`：
 
 ```python
-# qr_backends/foo_backend.py
+# src/queqiao/qr_backends/foo_backend.py
 from PIL import Image
 from .base import QRDecoderAdapter, QRDecodeResult
 
@@ -218,7 +232,7 @@ class FooQRDecoder(QRDecoderAdapter):
         return [QRDecodeResult(c.payload, c.x, c.y, c.w, c.h) for c in codes]
 ```
 
-**2. 在 `qr_backends/__init__.py` 里 import 并加入 `_REGISTRY`**：
+**2. 在 `src/queqiao/qr_backends/__init__.py` 里 import 并加入 `_REGISTRY`**：
 
 ```python
 from .foo_backend import FooQRDecoder
@@ -230,9 +244,9 @@ _REGISTRY = {
 }
 ```
 
-完成。`decoder.py --backend foo` 自动可用，`--help` 里也会列出。如要把它设为默认，把 `DEFAULT_BACKEND = FooQRDecoder.name`。
+完成。`queqiao decode --backend foo` 自动可用，`--help` 里也会列出。如要把它设为默认，把 `DEFAULT_BACKEND = FooQRDecoder.name`。
 
-性能/准确率对比可以丢给 `bench_backends.py`：在 `BACKENDS` 列表里加上 `(FooQRDecoder, 'foo')`，跑一次就能对比 pixel-perfect 速度和退化场景下的鲁棒性。
+性能/准确率对比可以丢给 `tests/bench_backends.py`：在 `BACKENDS` 列表里加上 `(FooQRDecoder, 'foo')`，跑一次就能对比 pixel-perfect 速度和退化场景下的鲁棒性。
 
 ## License
 

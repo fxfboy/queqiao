@@ -2,15 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+(Content is kept in sync with AGENTS.md — update that file first, then copy it here.)
+
 ## What this is
 
 QueQiao (鹊桥) is a tool for transferring **any file** across an **air gap** (内网/外网 — intranet/extranet) using QR codes that are displayed on screen, photographed, and decoded on the other side. The transport is a camera; there is no network path between the two sides.
 
-The project's scope is **only the QR transfer** — it does not care how the input is produced. `encoder.py` takes any file and renders a QR grid as HTML; `decoder.py` photographs it back into a byte-identical file. Generating a repo diff is an *optional* convenience in `make_diff.py`, not part of the core.
+The project's scope is **only the QR transfer** — it does not care how the input is produced. The package lives in `src/queqiao/`: `queqiao/encoder.py` takes any file and renders a QR grid as HTML; `queqiao/decoder.py` photographs it back into a byte-identical file. Generating a repo diff is an *optional* convenience in `queqiao/make_diff.py`, not part of the core. Tests live in `tests/` (plain scripts, not a package).
 
 ## Commands
 
-Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows CMD). Dependencies are declared in **`pyproject.toml`** and managed by [uv](https://docs.astral.sh/uv/); the run scripts auto-create `.venv` and `uv sync` on first run, then dispatch via `uv run`. There is no `requirements.txt` (uv pins exact versions in `uv.lock`). Native libraries are outside uv's reach: the scripts install the zbar lib (brew/apt/yum) for pyzbar, and the JAB Code tools must be built by hand (see the jab backend below).
+Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows CMD), which dispatch to the single console script `queqiao` (subcommands: `encode` / `decode` / `diff` / `stream` / `receive`) defined in `src/queqiao/cli.py`. The project **is an installable package** (`pipx install queqiao[pyzbar]`); in-repo, dependencies are declared in **`pyproject.toml`** and managed by [uv](https://docs.astral.sh/uv/); the run scripts auto-create `.venv` and `uv sync --extra pyzbar` on first run, then dispatch via `uv run`. There is no `requirements.txt` (uv pins exact versions in `uv.lock`). Native libraries are outside uv's reach: the scripts install the zbar lib (brew/apt/yum) for pyzbar, and the JAB Code tools must be built by hand (see the jab backend below).
 
 ```bash
 ./run.sh encode <file> -o qr.html              # any file → QR HTML
@@ -26,24 +28,26 @@ Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows 
 Direct invocation (via `uv run`, which auto-syncs deps; or `python` after `source .venv/bin/activate`):
 
 ```bash
-uv run python encoder.py <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
-                                           [--backend qr|jab] [--jab-colors 4|8]
-                                           [--jab-module-size N] [--jab-ecc-level 1..10]
-uv run python decoder.py <images-or-dirs...> -o out [--backend zxing|pyzbar|jab] [--debug]
-uv run python decode_pyzbar.py [image_dir=bid] [out=restored.out] # legacy pyzbar path, scans PNGs in a DIR
-uv run python make_diff.py <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
+uv run queqiao encode <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N] [--no-open]
+                                       [--backend qr|jab] [--jab-colors 4|8]
+                                       [--jab-module-size N] [--jab-ecc-level 1..10]
+uv run queqiao decode <images-or-dirs...> -o out [--backend zxing|pyzbar|jab] [--debug]
+uv run queqiao diff <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
+uv run queqiao stream <file> [--blocklen N] [--ecc L|M|Q|H] [--fps N]   # fountain playback window
+uv run queqiao receive [-o FILE] [--screen] [--reselect]                # screen-capture receiver
 ```
 
-**`--backend` means different things on the two sides, and the value spaces do not overlap.** On `encoder.py` it selects the *symbology* and is a hard-coded `('qr', 'jab')` choice — it does **not** consult the `qr_backends` registry. On `decoder.py` it selects the *decode implementation* and comes from `available_backends()` (`zxing` / `pyzbar` / `jab`). So `--backend qr` is an encode-only value and `--backend zxing` is a decode-only value; only `jab` is valid on both sides.
+**`--backend` means different things on the two sides, and the value spaces do not overlap.** On `encode` it selects the *symbology* and is a hard-coded `('qr', 'jab')` choice — it does **not** consult the `qr_backends` registry. On `decode` it selects the *decode implementation* and comes from `available_backends()` (`zxing` / `pyzbar` / `jab`). So `--backend qr` is an encode-only value and `--backend zxing` is a decode-only value; only `jab` is valid on both sides.
 
 ### Tests
 
 Tests are **plain assert-based scripts, not pytest** — there is no per-test selection; run the whole file. `python -m pytest` will not collect them meaningfully.
 
-- `test_roundtrip.py` — byte-roundtrip of the pipeline (arbitrary bytes → `encode_chunks` → HTML → simulated base85 decode → bytes). No diff or image deps. This is `run.sh test`.
-- `verify_full.py` / `test_qr_roundtrip.py` — render **real** QR PNGs and read them back with **pyzbar**, asserting byte-identical output. Self-contained: they encode an in-memory byte blob (no external fixtures). `run.sh verify` runs `verify_full.py`. (Run directly with `DYLD_LIBRARY_PATH=/opt/homebrew/lib` set so pyzbar finds libzbar.)
-- `test_make_diff.py` — directory-comparison logic for `make_diff.py`. `test_cli.py` — subprocess smoke tests for the three CLIs. (Neither is wired into `run.sh`; run with `uv run python`.) `test_cli.py` contains a pyzbar case that spawns `decoder.py` via `subprocess` **without inheriting `run.sh`'s environment**, so on macOS run it as `DYLD_LIBRARY_PATH=/opt/homebrew/lib uv run python test_cli.py` — otherwise that case exits 1 with an *empty* stderr, because the "pyzbar backend is unavailable" hint goes to stdout.
-- `test_jab_backend.py` — the JAB Code CLI bridge, **without needing the native tools**: it writes throwaway Python scripts that impersonate `jabcodeWriter`/`jabcodeReader` and points `QUEQIAO_JAB_WRITER`/`QUEQIAO_JAB_READER` at them. Also covers the `payload_encoding='raw'` chunk roundtrip. Not wired into `run.sh`; run with `uv run python test_jab_backend.py`.
+- All test scripts live in `tests/` and there is a runner: `uv run python tests/run_all.py` executes every suite in dependency order and stops at the first failure (it also sets `DYLD_LIBRARY_PATH` for the pyzbar cases on macOS).
+- `tests/test_roundtrip.py` — byte-roundtrip of the pipeline (arbitrary bytes → `encode_chunks` → HTML → simulated base85 decode → bytes). No diff or image deps. This is `run.sh test`.
+- `tests/verify_full.py` / `tests/test_qr_roundtrip.py` — render **real** QR PNGs and read them back with **pyzbar**, asserting byte-identical output. Self-contained: they encode an in-memory byte blob (no external fixtures). `run.sh verify` runs `tests/verify_full.py`. (When run directly, set `DYLD_LIBRARY_PATH=/opt/homebrew/lib` so pyzbar finds libzbar; `tests/run_all.py` does this for you.)
+- `tests/test_make_diff.py` — directory-comparison logic for `make_diff.py`. `tests/test_cli.py` — subprocess smoke tests for the CLIs, spawned as `python -m queqiao.encoder` / `python -m queqiao.decoder` (run with `uv run python`). Its pyzbar case needs libzbar reachable: on macOS run it as `DYLD_LIBRARY_PATH=/opt/homebrew/lib uv run python tests/test_cli.py` — otherwise that case exits 1 with an *empty* stderr, because the "pyzbar backend is unavailable" hint goes to stdout.
+- `tests/test_jab_backend.py` — the JAB Code CLI bridge, **without needing the native tools**: it writes throwaway Python scripts that impersonate `jabcodeWriter`/`jabcodeReader` and points `QUEQIAO_JAB_WRITER`/`QUEQIAO_JAB_READER` at them. Also covers the `payload_encoding='raw'` chunk roundtrip. Not wired into `run.sh`; run with `uv run python tests/test_jab_backend.py`.
 
 ## Architecture
 
@@ -78,12 +82,11 @@ JAB Code's ceiling is higher because raw payloads skip base85 and color multipli
 
 Every chunk is `MAGIC(2) | index(2,>H) | total(2,>H) | datalen(2,>H) | checksum(4) | data(N)` — a 12-byte header where `checksum = sha256(data)[:4]`. This struct is **hand-duplicated, not shared**, across six places:
 
-- `encoder.py` → `encode_chunks()` (writer)
-- `decoder.py` → `decode_single_chunk()`
-- `decode_pyzbar.py` → `decode_single_chunk()`
-- `test_roundtrip.py`, `test_qr_roundtrip.py`, `verify_full.py` (inline parsers)
+- `queqiao/encoder.py` → `encode_chunks()` (writer)
+- `queqiao/decoder.py` → `decode_single_chunk()`
+- `tests/test_roundtrip.py`, `tests/test_qr_roundtrip.py`, `tests/verify_full.py` (inline parsers)
 
-**If you change the header layout, magic, checksum, or struct format, you must update all of these in lockstep.** `make_diff.py` does **not** touch the wire format and is not part of this set. Neither is `test_jab_backend.py` — it imports `decoder.decode_single_chunk` rather than reimplementing the parser, so the count stays at six.
+**If you change the header layout, magic, checksum, or struct format, you must update all of these in lockstep.** `make_diff.py` does **not** touch the wire format and is not part of this set. Neither is `tests/test_jab_backend.py` — it imports `decode_single_chunk` rather than reimplementing the parser, so the count stays at five. (The legacy `decode_pyzbar.py` copy was deleted when the project became a package.)
 
 **Chunk index 0 is a metadata chunk** whose payload is compact JSON:
 `{"version":1,"filename":"input.txt","size":12345,"sha256":"abcdef...","compressed_size":5678}`
@@ -91,20 +94,20 @@ Data chunks occupy indices 1..N. The `total` field in every header = N+1 (metada
 
 ### Reassembly is order-independent by design
 
-The `index`/`total` fields in the header — not image position — drive reconstruction. Decoders dedupe by index, drop chunks failing the SHA256 check, and abort listing any missing indices. Consequence: `decoder.py`'s `sort_qr_by_position()` is essentially cosmetic, and `decode_pyzbar.py` skips sorting entirely. Multi-photo decode works by concatenating all detected codes across all images into one pool.
+The `index`/`total` fields in the header — not image position — drive reconstruction. Decoders dedupe by index, drop chunks failing the SHA256 check, and abort listing any missing indices. Consequence: `decoder.py`'s `sort_qr_by_position()` is essentially cosmetic. Multi-photo decode works by concatenating all detected codes across all images into one pool.
 
 This is also what makes the jab backend workable despite its one-code-per-image reader: N cropped single-code PNGs pool into the same index-keyed reassembly as one photo containing N QR codes.
 
-### Decoder backends live in `qr_backends/`
+### Decoder backends live in `src/queqiao/qr_backends/`
 
-Backends are pluggable. Each is one module that subclasses `qr_backends.base.QRDecoderAdapter` and implements `decode_image(path) -> list[QRDecodeResult]`. Registration is explicit in `qr_backends/__init__.py` — the dict order defines `available_backends()` order, and `DEFAULT_BACKEND` is the CLI default. `decoder.py` only talks to the registry (`get_backend(name)`); it does not know which backends exist.
+Backends are pluggable. Each is one module that subclasses `queqiao.qr_backends.base.QRDecoderAdapter` and implements `decode_image(path) -> list[QRDecodeResult]`. Registration is explicit in `qr_backends/__init__.py` — the dict order defines `available_backends()` order, and `DEFAULT_BACKEND` is the CLI default. `decoder.py` only talks to the registry (`get_backend(name)`); it does not know which backends exist.
 
 The adapter contract has **two** class attributes, not one: `name` (the `--backend` identifier) and `payload_encoding` (`'base85'` by default, `'raw'` for symbologies that carry bytes directly). A backend that returns raw chunk bytes **must** override `payload_encoding` or the header parse will fail on garbage. Missing third-party/native deps should be raised as `RuntimeError` from `__init__` so the CLI can print an install hint.
 
-To add a new backend: write `qr_backends/<name>_backend.py`, then import + register it in `qr_backends/__init__.py`. The decoder CLI's `--backend` choices update automatically. **Encoding is not symmetric** — adding an encode-side symbology means touching `encoder.py`'s hard-coded `--backend` choices and `generate_html()` branch as well.
+To add a new backend: write `src/queqiao/qr_backends/<name>_backend.py`, then import + register it in `src/queqiao/qr_backends/__init__.py`. The decoder CLI's `--backend` choices update automatically. **Encoding is not symmetric** — adding an encode-side symbology means touching `queqiao/encoder.py`'s hard-coded `--backend` choices and `generate_html()` branch as well.
 
 Currently shipped:
-- **zxing** (`--backend zxing`, **default**): pure-wheel C++ port of ZXing (`pip install zxing-cpp`) — **no native system library to install**. Reads PIL images directly and exposes raw payload bytes via `barcode.bytes` (no utf-8 round-trip), and gives a 4-corner `position` we map to a bounding box. On pixel-perfect screenshot transfer (queqiao's primary use case) it is ~10–14× faster than pyzbar at 100% accuracy across chunk-sizes 800/1500/1800; on degraded photos (downsample + Gaussian blur + JPEG) the crash threshold is the same as pyzbar — neither offers a robustness edge on dense v40-class codes once downsampling drops below ~30% with blur. See `bench_backends.py` for the reproducible benchmark.
+- **zxing** (`--backend zxing`, **default**): pure-wheel C++ port of ZXing (`pip install zxing-cpp`) — **no native system library to install**. Reads PIL images directly and exposes raw payload bytes via `barcode.bytes` (no utf-8 round-trip), and gives a 4-corner `position` we map to a bounding box. On pixel-perfect screenshot transfer (queqiao's primary use case) it is ~10–14× faster than pyzbar at 100% accuracy across chunk-sizes 800/1500/1800; on degraded photos (downsample + Gaussian blur + JPEG) the crash threshold is the same as pyzbar — neither offers a robustness edge on dense v40-class codes once downsampling drops below ~30% with blur. See `tests/bench_backends.py` for the reproducible benchmark.
 - **pyzbar** (`--backend pyzbar`): opt-in legacy backend that wraps the **native zbar library** (`brew install zbar`; macOS also needs `DYLD_LIBRARY_PATH=/opt/homebrew/lib`, which `run.sh` sets). Kept as a fallback for specific samples where zxing fails to detect — currently no such samples are documented.
 - **jab** (`--backend jab`, `payload_encoding='raw'`): color barcode (JAB Code) for much denser transfer. This backend is a **subprocess bridge to the official reference CLI**, not a library — `jabcode_cli.py` shells out to `jabcodeWriter` (encode) and `jabcodeReader` (decode). Those binaries are **not** Python packages and `uv sync` will not provide them: build them from <https://github.com/jabcode/jabcode> and put them on `PATH`, or point `QUEQIAO_JAB_WRITER` / `QUEQIAO_JAB_READER` at them. Two constraints follow from the reference reader: it accepts PNG/TIFF only (the backend normalizes camera formats to PNG in a temp dir first), and **it decodes exactly one JAB Code per image** — so `decode_image()` always returns 0 or 1 results, and a full-page screenshot of many codes must be cropped into per-code images before decoding. That is why the encoder defaults to `--cols 1` for jab.
 
