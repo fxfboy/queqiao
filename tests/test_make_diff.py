@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for queqiao.make_diff.compare_directories."""
 import os
-import sys
 import tempfile
 import shutil
 

@@ -8,9 +8,7 @@
 docs/superpowers/plans/2026-09-05-streaming-fountain-transfer.md 的 Task 6。
 本脚本按修订后的阈值断言：≤3K 时 >= 99%，≤2K 时 >= 95%（观测项）。
 """
-import os
 import random
-import sys
 
 
 from queqiao.fountain import FountainDecoder, FountainEncoder

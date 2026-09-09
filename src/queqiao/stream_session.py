@@ -64,8 +64,17 @@ class SessionStats:
                  'duplicate', 'other_bucket', 'conflicts', 'switches', 'resets')
 
     def __init__(self):
-        for f in self.__slots__:
-            setattr(self, f, 0)
+        # 显式逐个赋值（不用 setattr 循环）：pylint/IDE 能推断出成员
+        self.frames = 0
+        self.codes = 0
+        self.foreign = 0
+        self.corrupt = 0
+        self.valid = 0
+        self.duplicate = 0
+        self.other_bucket = 0
+        self.conflicts = 0
+        self.switches = 0
+        self.resets = 0
 
     def summary(self):
         return ("帧 %d | 码 %d | 有效 %d | 重复 %d | 损坏 %d | 非本协议 %d | "

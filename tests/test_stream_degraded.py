@@ -6,8 +6,6 @@
 能看出是变好还是变坏，而不用每次都去连 RDP。
 """
 import io
-import os
-import sys
 
 
 from PIL import Image, ImageFilter
@@ -27,7 +25,7 @@ def degrade(image, scale=1.0, blur=0.0, jpeg_quality=None):
     if scale != 1.0:
         w, h = out.size
         out = out.resize((max(1, int(w * scale)), max(1, int(h * scale))),
-                         Image.BILINEAR)
+                         Image.Resampling.BILINEAR)
     if blur:
         out = out.filter(ImageFilter.GaussianBlur(blur))
     if jpeg_quality is not None:

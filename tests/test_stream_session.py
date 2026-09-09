@@ -4,14 +4,12 @@
 K=1 / K=2 的死锁回归是本文件最重要的用例——这两档对应原文件约 5-17 KB
 （配置补丁、单个 patch），是主路径而不是边角。
 """
-import os
 import random
-import sys
 
 
 from queqiao.fountain import FountainEncoder, LT_MIN_K
 from queqiao.stream_packet import build_payload, pack_packet, split_blocks, unpack_packet
-from queqiao.stream_session import LOCK_MIN_PACKETS, SessionStats, StreamSession
+from queqiao.stream_session import LOCK_MIN_PACKETS, StreamSession
 
 
 def incompressible(n, seed=20260905):
@@ -81,7 +79,7 @@ def test_k1_does_not_deadlock():
 
 def test_k2_does_not_deadlock():
     print("[TEST] K=2 不死锁（P1 回归）...")
-    stream, K, data = make_stream("small.txt", b"a small patch\n" * 60, 200)
+    stream, K, _data = make_stream("small.txt", b"a small patch\n" * 60, 200)
     assert K == 2, "本用例要求 K=2，实得 %d" % K
     s = StreamSession()
     for _ in range(20):
@@ -138,7 +136,7 @@ def test_foreign_and_corrupt_are_distinguished():
 
 def test_progress_and_stall_reporting():
     print("[TEST] progress 反映真实解出块数，不假涨...")
-    stream, K, _ = make_stream("a.txt", incompressible(60000), 800)
+    stream, _, _ = make_stream("a.txt", incompressible(60000), 800)
     s = StreamSession()
     assert s.progress == 0.0
     for _ in range(LOCK_MIN_PACKETS):
@@ -221,7 +219,7 @@ def test_seed_conflict_forces_reset():
 def test_session_switch_when_locked_goes_quiet():
     print("[TEST] locked 会话长时间无新包 + 另一桶达门槛 → 切换...")
     a, _, _ = make_stream("a.txt", incompressible(5000), 800)
-    b, Kb, data_b = make_stream("b.txt", incompressible(9000), 900)   # 不同 blocklen → 不同桶
+    b, Kb, _data_b = make_stream("b.txt", incompressible(9000), 900)   # 不同 blocklen → 不同桶
 
     s = StreamSession(switch_idle_packets=5)
     for _ in range(LOCK_MIN_PACKETS):

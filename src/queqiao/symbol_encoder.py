@@ -8,7 +8,6 @@ stream_encoder.py / player.py / fountain.py 一行不改。它不会让 JAB 流�
 本轮不做：编码器注册表、标定轴抽象、拆包。见设计文档 §5.1。
 """
 
-import base64
 from abc import ABC, abstractmethod
 
 from queqiao.encoder import chunk_to_qr_image
@@ -60,8 +59,10 @@ class SymbolEncoder(ABC):
         from queqiao.stream_packet import HEADER_SIZE
         need = blocklen + HEADER_SIZE
         if need > self.max_payload_bytes:
-            raise ValueError(
-                "blocklen=%d 加 %d 字节头共 %d 字节，超出 %s 符号容量 %d。"
+            # self.name 在基类声明为 None，pylint 推断不到子类的字面量 'qr'，
+            # 会把 %s 误报成 bad-string-format-type（把 None 配给了 %d）——豁免
+            raise ValueError(  # pylint: disable=bad-string-format-type
+                "blocklen=%d 加 %d 字节头共 %d 字节，超出 %s 符号容量 %d。"  # pylint: disable=bad-string-format-type
                 "请调小 blocklen 或降低 ECC 等级。"
                 % (blocklen, HEADER_SIZE, need, self.name, self.max_payload_bytes)
             )

@@ -106,8 +106,8 @@ def chunk_to_qr_image(payload, box_size=5, border=2, ecc=None):
     else:
         try:
             error_correction = _ECC_LEVELS[ecc]
-        except (KeyError, TypeError):
-            raise ValueError("ecc 必须是 'L'/'M'/'Q'/'H' 之一，实得 %r" % (ecc,))
+        except (KeyError, TypeError) as exc:
+            raise ValueError("ecc 必须是 'L'/'M'/'Q'/'H' 之一，实得 %r" % (ecc,)) from exc
 
     qr = qrcode.QRCode(
         version=None,  # 自动选择最小版本

@@ -165,7 +165,7 @@ def decode_single_chunk(payload, payload_encoding='base85'):
         
         return (idx, total, data)
         
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -198,9 +198,8 @@ def decode_and_merge_chunks(qr_data_list, payload_encoding='base85'):
         if idx in chunks:
             if chunks[idx] == data:
                 continue
-            else:
-                print(f"  ⚠️  Conflicting data for chunk {idx}, using first occurrence")
-                continue
+            print(f"  ⚠️  Conflicting data for chunk {idx}, using first occurrence")
+            continue
 
         chunks[idx] = data
 
@@ -307,7 +306,7 @@ def main(argv=None):
         print(f"[📷] Processing: {img_path}")
         
         if not os.path.exists(img_path):
-            print(f"  ❌ File not found, skipping")
+            print("  ❌ File not found, skipping")
             continue
         
         try:
@@ -377,7 +376,7 @@ def main(argv=None):
     except lzma.LZMAError:
         print("  ⚠️  Data is not valid xz, writing raw bytes...")
         output_data = compressed_data
-    except Exception as e:
+    except Exception:
         print(f"  ❌ Decompression failed: {e}")
         sys.exit(1)
 
@@ -386,10 +385,10 @@ def main(argv=None):
         actual_sha256 = hashlib.sha256(output_data).hexdigest()
         expected_sha256 = metadata['sha256']
         if actual_sha256 != expected_sha256:
-            print(f"\n  ❌ SHA256 MISMATCH")
+            print("\n  ❌ SHA256 MISMATCH")
             print(f"  Expected: {expected_sha256}")
             print(f"  Actual:   {actual_sha256}")
-            print(f"  The restored file may be corrupted!")
+            print("  The restored file may be corrupted!")
             sys.exit(1)
         else:
             print(f"  ✅ SHA256 verified: {actual_sha256[:16]}...")

@@ -66,13 +66,13 @@ def validate_settings(raw):
         box_size = raw['box_size']
     except (KeyError, TypeError):
         return None
-    if type(blocklen) is not int or not (1 <= blocklen <= _MAX_BLOCKLEN_HINT):
+    if type(blocklen) is not int or 1 > blocklen or blocklen > _MAX_BLOCKLEN_HINT:  # pylint: disable=unidiomatic-typecheck  # 精确类型: isinstance 会放过 bool
         return None
     if ecc not in _ECC_CHOICES:
         return None
     if not isinstance(fps, (int, float)) or isinstance(fps, bool) or fps <= 0:
         return None
-    if type(box_size) is not int or not (1 <= box_size <= 64):
+    if type(box_size) is not int or 1 > box_size or box_size > 64:  # pylint: disable=unidiomatic-typecheck
         return None
     return {'blocklen': blocklen, 'ecc': ecc, 'fps': fps, 'box_size': box_size}
 
@@ -186,8 +186,7 @@ class CalibrationCollector:
                     run = 0
                 else:
                     run += 1
-                    if run > gap:
-                        gap = run
+                    gap = max(gap, run)
             out.append(StageReport(K, blocklen, len(seeds), len(seeds),
                                    span, len(seeds) / span, gap))
         return out
@@ -202,4 +201,3 @@ class CalibrationCollector:
             return None
         winner = max(passing, key=lambda r: r.blocklen)
         return dict(by_len[winner.blocklen])
-

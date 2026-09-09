@@ -3,8 +3,6 @@
 但它算出来的 bbox 换算、校验、持久化必须测——那是 Retina 半屏 bug 的藏身处。
 """
 import json
-import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -124,7 +122,7 @@ def test_frame_source_yields_fresh_images():
         seen.append(id(img))
         img.close()          # 调用方持有所有权，关它
     assert len(seen) == 3, "关掉前一帧不得中断迭代"
-    assert len(set(seen)) == 3 or True   # id 可能复用，关键是没抛异常
+    assert len(set(seen)) == 3, "id 可能复用，关键是没抛异常"
     print("  ✅ PASSED")
 
 

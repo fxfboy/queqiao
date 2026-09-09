@@ -31,3 +31,37 @@ packages = ["src/queqiao"]
 [tool.uv]
 # 现在是可安装的包：uv sync 后以 editable 方式就位，uv run queqiao 直接可用。
 package = true
+
+[tool.pylint.main]
+py-version = "3.10"
+
+[tool.pylint.typecheck]
+# C 扩展模块：运行时按内省分析成员，避免 I1101 误报
+extension-pkg-allow-list = ["zxingcpp", "pyzbar"]
+
+[tool.pylint."messages control"]
+# 豁免的都是**项目刻意为之**的风格，不是疏漏（ genuine 缺陷照修）：
+# - %-formatting：全库统一 %s/%d 风格，不用 f-string（C0209/C0325）
+# - 行宽不设限：中文注释行天然超 100 列（C0301）
+# - 函数/类 docstring：测试与私有函数不强制（C0115/C0116）
+# - 命名：tests 里变量名短、test_ 前缀长名并存（C0103）
+# - 延迟导入：tkinter/mss/jabcode 等重依赖故意 lazy（C0411/C0413/C0415/I1101/W0404/W0621）
+# - broad-except：解码层"永不抛"是设计契约（W0718）
+# - unspecified-encoding：输入输出刻意按原始字节处理（W1514）
+# - subprocess check=False：CLI 桥接要自己看 returncode（W1510）
+# - 复杂度/结构指标：面向可靠性的函数天然长（R0902/R0903/R0911-R0917）
+disable = [
+    "consider-using-f-string",
+    "missing-module-docstring", "missing-class-docstring", "missing-function-docstring",
+    "line-too-long", "trailing-whitespace", "mixed-line-endings",
+    "invalid-name", "useless-option-value",
+    "wrong-import-order", "ungrouped-imports", "wrong-import-position",
+    "import-outside-toplevel", "import-error", "reimported", "redefined-outer-name",
+    "broad-exception-caught", "unspecified-encoding", "unknown-option-value",
+    "consider-using-with", "subprocess-run-check",
+    "attribute-defined-outside-init", "unused-argument",
+    "too-many-instance-attributes", "too-few-public-methods",
+    "too-many-return-statements", "too-many-branches", "too-many-arguments",
+    "too-many-positional-arguments", "too-many-locals", "too-many-statements",
+    "duplicate-code", "use-dict-literal",
+]

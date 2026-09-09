@@ -25,7 +25,7 @@ def build_sample():
 def verify_full_roundtrip():
     sample = build_sample()
     print(f"[1/4] Encoding {len(sample):,} bytes...")
-    chunks, original_size, compressed_size = encode_chunks(sample, chunk_size=400, filename="verify_sample.bin")
+    chunks, _, compressed_size = encode_chunks(sample, chunk_size=400, filename="verify_sample.bin")
     print(f"  {len(chunks)} chunks, {compressed_size:,} compressed bytes")
 
     print("[2/4] Rendering QR PNGs...")

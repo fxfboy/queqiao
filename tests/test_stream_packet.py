@@ -6,15 +6,13 @@
 """
 import base64
 import hashlib
-import os
 import struct
-import sys
 
 
 import queqiao.stream_packet
 from queqiao.stream_packet import (
     MAGIC, HEADER_SIZE, MAX_BLOCKLEN, MAX_TOTAL_PAYLOAD,
-    PacketError, StreamPacket, pack_packet, unpack_packet, peek_magic,
+    PacketError, pack_packet, unpack_packet, peek_magic,
     PAYLOAD_VERSION, PayloadError, serialize_meta, derive_nonce,
     build_payload, split_blocks, parse_payload, safe_output_name,
 )
@@ -265,7 +263,7 @@ def test_payload_roundtrip():
         ("bin.dat", bytes(range(256)) * 40),
         ("报告.txt", "中文内容测试\n".encode('utf-8') * 50),
     ]:
-        payload, meta_json, nonce = build_payload(filename, data)
+        payload, _, _ = build_payload(filename, data)
         for blocklen in (64, 800, 1800):
             blocks = split_blocks(payload, blocklen)
             K = len(blocks)

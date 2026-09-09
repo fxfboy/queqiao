@@ -76,7 +76,7 @@ def is_black_frame(image, threshold=8):
     这是最容易被误判成"码解不出来"的失败模式。
     """
     gray = image.convert('L')
-    lo, hi = gray.getextrema()
+    _, hi = gray.getextrema()
     return hi < threshold
 
 

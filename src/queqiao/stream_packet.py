@@ -66,13 +66,13 @@ def _checksum(head, data):
 
 def pack_packet(nonce, seed, K, blocklen, data):
     """产出一个完整的 16 + blocklen 字节包。"""
-    if not (0 <= nonce <= 0xFFFF):
+    if not 0 <= nonce <= 0xFFFF:
         raise ValueError("nonce 必须落在 [0, 65535]，实得 %d" % nonce)
-    if not (0 <= seed <= 0xFFFFFFFF):
+    if not 0 <= seed <= 0xFFFFFFFF:
         raise ValueError("seed 必须落在 [0, 2^32-1]，实得 %d" % seed)
-    if not (1 <= K <= 0xFFFF):
+    if not 1 <= K <= 0xFFFF:
         raise ValueError("K 必须落在 [1, 65535]，实得 %d" % K)
-    if not (1 <= blocklen <= 0xFFFF):
+    if not 1 <= blocklen <= 0xFFFF:
         raise ValueError("blocklen 必须落在 [1, 65535]，实得 %d" % blocklen)
     if len(data) != blocklen:
         raise ValueError("data 长度必须恒等于 blocklen=%d，实得 %d"
@@ -247,7 +247,7 @@ def parse_payload(assembled, K, blocklen):
     try:
         # json.loads 默认接受 NaN/Infinity/-Infinity，必须用钩子拒绝
         meta = json.loads(meta_text, parse_constant=_reject_constant)
-    except PayloadError:
+    except PayloadError:  # pylint: disable=try-except-raise  # PayloadError 是 ValueError 子类，必须先挡住再让下面兜底
         raise
     except ValueError as e:
         raise PayloadError('meta_json', "meta_json 不是合法 JSON: %s" % e) from e
@@ -287,7 +287,7 @@ def parse_payload(assembled, K, blocklen):
 
 def safe_output_name(filename):
     """只取 basename，挡住路径穿越；空/危险名回落到安全默认名。"""
-    name = str(filename).replace('\\', '/').split('/')[-1]
+    name = str(filename).replace('\\', '/').rsplit('/', 1)[-1]
     name = os.path.basename(name).strip()
     if not name or name in ('.', '..'):
         return _DEFAULT_OUTPUT_NAME

@@ -18,7 +18,7 @@ SAMPLE = b"QR roundtrip sample\n" + bytes(range(256)) * 4
 
 def test_full_roundtrip_with_qr():
     print("[1/4] Encoding sample bytes...")
-    chunks, original_size, compressed_size = encode_chunks(SAMPLE, chunk_size=400, filename="roundtrip.bin")
+    chunks, _, compressed_size = encode_chunks(SAMPLE, chunk_size=400, filename="roundtrip.bin")
     print(f"  {len(chunks)} chunks, {compressed_size} compressed bytes")
 
     print("[2/4] Rendering QR PNGs...")

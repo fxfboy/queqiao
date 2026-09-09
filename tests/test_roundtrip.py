@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Byte-roundtrip tests for the QR transfer pipeline (no diff dependency)."""
-import os
-import sys
 import json
 import lzma
+import os
 import struct
 import hashlib
 import base64
@@ -18,14 +17,14 @@ SAMPLE = b"Hello, QR transfer!\n" + bytes(range(256)) * 8
 
 def test_encode_chunks():
     print("[TEST] encode_chunks...")
-    chunks, original_size, compressed_size = encode_chunks(SAMPLE, chunk_size=400, filename="test_sample.bin")
+    chunks, original_size, _ = encode_chunks(SAMPLE, chunk_size=400, filename="test_sample.bin")
     assert original_size == len(SAMPLE), "original_size must equal input length"
     assert len(chunks) > 1, "expected metadata + at least one data chunk"
     for i, c in enumerate(chunks):
         assert c[:2] == b'QR', f"chunk {i} bad magic"
 
     raw0 = chunks[0]
-    idx0, total0, datalen0 = struct.unpack('>HHH', raw0[2:8])
+    idx0, _, datalen0 = struct.unpack('>HHH', raw0[2:8])
     assert idx0 == 0, "first chunk must be metadata (index 0)"
     meta = json.loads(raw0[12:12+datalen0].decode('utf-8'))
     assert meta['version'] == 1

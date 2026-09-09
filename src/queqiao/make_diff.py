@@ -187,7 +187,7 @@ def compare_directories(dir1, dir2, ignore_binary=True, use_gitignore=True, incl
                 diff = difflib.unified_diff(
                     lines, [],
                     fromfile=f'a/{f}',
-                    tofile=f'/dev/null',
+                    tofile='/dev/null',
                     lineterm='\n'
                 )
                 diff_str = '\n'.join(diff)

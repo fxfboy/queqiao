@@ -14,7 +14,7 @@ import time
 from PIL import Image
 
 from queqiao.stream_encoder import (
-    JOIN_TIMEOUT, QUEUE_MAXSIZE, Frame, GeneratorError, StreamEncoder,
+    Frame, GeneratorError, StreamEncoder,
 )
 from queqiao.symbol_encoder import SymbolEncoder
 
@@ -200,12 +200,12 @@ def test_stuck_generator_does_not_block_process_exit():
                          text=True, errors='replace')
     try:
         out = p.communicate(timeout=20)[0]
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         p.kill()
         p.communicate(timeout=10)
         raise AssertionError(
             "主逻辑已结束但进程 20s 未退出——生成线程被解释器无条件 join 了，"
-            "检查 StreamEncoder.start() 的 daemon 标志")
+            "检查 StreamEncoder.start() 的 daemon 标志") from exc
     assert p.returncode == 0, "子进程退出码 %r，输出:\n%s" % (p.returncode, out)
     print("  ✅ PASSED")
 
@@ -305,7 +305,6 @@ def test_format_status():
 def test_image_to_tk_data_is_base64_png():
     print("[TEST] 帧图转 Tk 可吃的 base64 PNG（不走 PIL.ImageTk）...")
     import base64
-    from PIL import Image
     from queqiao.player import image_to_tk_data
     data = image_to_tk_data(Image.new('RGB', (64, 64), 'white'))
     assert isinstance(data, bytes), "tk.PhotoImage(data=) 收 bytes 或 str"
@@ -316,7 +315,6 @@ def test_image_to_tk_data_is_base64_png():
 
 def test_ensure_tcl_env_is_idempotent_and_safe():
     print("[TEST] TCL_LIBRARY 修补幂等且不误伤...")
-    import os
     from queqiao.player import ensure_tcl_env
     saved = os.environ.get('TCL_LIBRARY')
     try:

@@ -5,8 +5,6 @@ reference vectors 是跨 Python 版本、跨 Windows/macOS 一致性的唯一硬
 比任何统计测试都硬。任何一条断言失败都意味着两端会解不出，不是"精度问题"。
 """
 import math
-import os
-import sys
 
 
 from queqiao.fountain import (
@@ -349,7 +347,7 @@ def test_encoder_seed_does_not_wrap():
     K = 10
     blocks = [bytes([i]) * 4 for i in range(K)]
     enc = FountainEncoder(blocks)
-    enc._n = SEED_MAX                        # 直接推到边界
+    enc._n = SEED_MAX  # pylint: disable=protected-access  # 直接推到边界
     seed, _ = enc.next_packet()
     assert seed == SEED_MAX
     try:
@@ -417,7 +415,7 @@ def test_decoder_tolerates_loss_reorder_duplicate():
         dec.add_packet(seed, data)
         if dec.is_complete:
             break
-    assert dec.is_complete, "丢 35% + 乱序 + 重复下应能解出，实得 %d/%d" % (dec.solved_count, K)
+    assert dec.is_complete, "丢 35%% + 乱序 + 重复下应能解出，实得 %d/%d" % (dec.solved_count, K)
     assert dec.assemble() == b''.join(blocks)
     print("  ✅ PASSED")
 

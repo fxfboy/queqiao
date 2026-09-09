@@ -10,7 +10,6 @@
 运行: DYLD_LIBRARY_PATH=/opt/homebrew/lib uv run python bench_backends.py
 """
 import os
-import sys
 import time
 import lzma
 import hashlib
@@ -59,11 +58,11 @@ def degrade_pngs(paths, ratio, blur_radius, jpeg_quality):
         img = Image.open(p).convert('RGB')
         w, h = img.size
         # 1. 下采样 (拍远了 / 屏幕分辨率不够)
-        small = img.resize((int(w * ratio), int(h * ratio)), Image.BILINEAR)
+        small = img.resize((int(w * ratio), int(h * ratio)), Image.Resampling.BILINEAR)
         # 2. 高斯模糊 (对焦不准 / 手抖)
         blurred = small.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         # 3. 放回原尺寸
-        restored = blurred.resize((w, h), Image.BILINEAR)
+        restored = blurred.resize((w, h), Image.Resampling.BILINEAR)
         # 4. JPEG 编解码 (手机相册常见格式)
         op = tempfile.mktemp(suffix='.jpg')
         restored.save(op, format='JPEG', quality=jpeg_quality)
@@ -118,7 +117,7 @@ def main():
         print(f"  生成 {n} 个 QR (压缩 {comp:,} bytes), 单 PNG {png_w}×{png_w}")
 
         # A. pixel-perfect
-        print(f"  [A] pixel-perfect:")
+        print("  [A] pixel-perfect:")
         for cls, label in BACKENDS:
             adapter = cls()
             elapsed, b85 = run_backend(adapter, paths)
@@ -131,7 +130,7 @@ def main():
             perf_rows.append((cs, n, label, elapsed, valid, ok))
 
         # B. 真实拍照退化模拟
-        print(f"  [B] 降质模拟 (缩放+模糊+JPEG):")
+        print("  [B] 降质模拟 (缩放+模糊+JPEG):")
         for profile_name, ratio, blur, jpeg_q in DEGRADE_PROFILES:
             deg_paths = degrade_pngs(paths, ratio, blur, jpeg_q)
             tag = f"{profile_name}({int(ratio*100)}%/blur{blur}/jpeg{jpeg_q})"
@@ -191,7 +190,7 @@ def main():
             ok_profs = [r[2] for r in degrade_rows
                         if r[0] == cs and r[3] == label and r[7]]
             if ok_profs:
-                worst = max(ok_profs, key=lambda p: profile_order.index(p))
+                worst = max(ok_profs, key=profile_order.index)
             else:
                 worst = '全部失败'
             print(f"    chunk_size={cs}  {label:6s}: 最严能扛 {worst}")

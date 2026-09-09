@@ -7,7 +7,6 @@
 import hashlib
 import os
 import random
-import sys
 import tempfile
 from pathlib import Path
 
@@ -212,7 +211,7 @@ def test_decode_frame_tolerates_backend_errors():
             raise ValueError("corrupt frame")
 
     out = decode_frame(Image.new('RGB', (4, 4)), Angry())
-    assert out == [], "解码异常应吞掉并返回空列表"
+    assert not out, "解码异常应吞掉并返回空列表"
     print("  ✅ PASSED")
 
 
@@ -226,7 +225,7 @@ def test_decode_frame_rejects_bad_base85():
             return [_R(b'not~~~valid~~~b85!!!\x00\xff')]
 
     out = decode_frame(Image.new('RGB', (4, 4)), Junk())
-    assert out == [], "b85decode 失败的负载应被静默丢弃（它多半是别人的码）"
+    assert not out, "b85decode 失败的负载应被静默丢弃（它多半是别人的码）"
     print("  ✅ PASSED")
 
 

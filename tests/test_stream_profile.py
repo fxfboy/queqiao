@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """profile 读写。重点是"任何脏数据都退化成保守默认，绝不抛"。"""
 import json
-import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -167,15 +165,15 @@ def test_collector_ignores_foreign_and_corrupt():
     assert col.feed(b'QR' + b'\x00' * 20) is False, "v1 的码不该进统计"
     assert col.feed(b'') is False
     assert col.feed(b'QF' + b'\x00' * 4) is False, "太短的 QF 包也不该进统计"
-    assert col.report() == []
+    assert not col.report()
     print("  ✅ PASSED")
 
 
 def test_collector_best_picks_largest_passing_blocklen():
     print("[TEST] best() 取达标档里 blocklen 最大的那个...")
     from queqiao.stream_packet import pack_packet
-    from queqiao.stream_profile import CALIBRATION_MATRIX, CalibrationCollector
 
+    from queqiao.stream_profile import CalibrationCollector
     col = CalibrationCollector()
     # 400 档全中，2300 档只有一半 —— 应选 400 而不是贪心选 2300
     for seed in range(100):

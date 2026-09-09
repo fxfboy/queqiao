@@ -7,7 +7,6 @@
 import base64
 import io
 import os
-import sys
 
 
 from PIL import Image
@@ -156,7 +155,6 @@ def test_all_zero_payload_at_capacity_ceiling():
 
 def test_forcing_byte_mode_leaves_v1v2_images_identical():
     print("[TEST] 强制 byte 模式不改变 v1/v2 的正常载荷图像...")
-    import os
     import qrcode as _qrcode
     import queqiao.encoder as v12_encoder
     # base85 字符集含大小写字母和符号，随机载荷里出现 20 个连续数字的概率约 1e-18，
