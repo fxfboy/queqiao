@@ -98,6 +98,13 @@ The `index`/`total` fields in the header — not image position — drive recons
 
 This is also what makes the jab backend workable despite its one-code-per-image reader: N cropped single-code PNGs pool into the same index-keyed reassembly as one photo containing N QR codes.
 
+### Screen capture & region selection (`frame_source.py` — the `receive` path)
+
+- `select_region()` lays **one overlay window per monitor**: mss enumerates every display's global rect and a Tk Toplevel is placed at each monitor's origin (negative origins included). The drag can happen on any display. The returned bbox is in **mss global coordinates** (fed straight to `mss.grab`) and is persisted to `~/.queqiao/last_region.json` (`--reselect` re-picks).
+- **Coordinate spaces are platform-dependent and easy to get wrong.** On macOS, mss reports `CGDisplayBounds` (logical points) and Tk lives in the same space, so the factor is exactly 1 (probe on a 4K@2x display: both sides report 1920×1080; the grabbed *image* is still physical 2× pixels — fine, decoding just gets denser pixels). On Windows, mss reports physical pixels while Tk reports DPI-virtualized logical coords, so a uniform primary-monitor factor is applied (mixed-DPI multi-monitor is off by a couple of pixels — accepted). `tk_monitor_rects()` picks the branch: Tk screen == union of monitors → 1:1, else primary ratio. **Never compute the ratio from the union** — in multi-monitor it is ~2× wide and would halve every rect.
+- Tk geometry quirk: negative window coordinates must be written `+-N` — a bare `-N` means "N px from the right/bottom edge" (`_geometry_str` handles this).
+- Ghost-overlay contract: on macOS Tk, `destroy()` teardown depends on event-loop flushing, which never happens once the receive loop starts — so **every** overlay window is withdrawn before destroy; missing one window = one stuck 28% mask on that monitor.
+
 ### Decoder backends live in `src/queqiao/qr_backends/`
 
 Backends are pluggable. Each is one module that subclasses `queqiao.qr_backends.base.QRDecoderAdapter` and implements `decode_image(path) -> list[QRDecodeResult]`. Registration is explicit in `qr_backends/__init__.py` — the dict order defines `available_backends()` order, and `DEFAULT_BACKEND` is the CLI default. `decoder.py` only talks to the registry (`get_backend(name)`); it does not know which backends exist.

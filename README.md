@@ -115,6 +115,26 @@ JAB 默认使用 `chunk-size=3000`、单列 900px 展示、8 色和纠错级别 
 
 JAB Code 图片使用 `--backend jab`，并要求安装上述官方 reader。
 
+### 流式传输（喷泉码）—— 屏幕实时摆渡
+
+除了一次性拍照/截图往返，还内置喷泉码（fountain code）流式模式：发送端循环播放 QR 帧流，接收端持续抓屏直到收齐。丢帧靠喷泉码冗余自动补齐，不需要人工清点二维码数量。
+
+```bash
+# 发送端（内网）: 打开置顶播放窗，循环发包，收端收齐后按 Esc 停止
+./run.sh stream file.bin            # 可调 --blocklen / --ecc L|M|Q|H / --fps / --box-size
+
+# 接收端（外网）: 圈选播放窗所在屏幕区域，收齐自动写入
+./run.sh receive                    # -o 指定输出路径；默认用发送端文件名写到当前目录
+```
+
+接收端说明：
+
+- **多显示器**：首次圈选时每块屏幕各铺一层半透明遮罩，在任意一块屏上拖框即可（副屏、负坐标排布都支持），多屏时每层遮罩会标注"屏幕 N/M"。
+- 圈选结果存 `~/.queqiao/last_region.json`，下次自动复用；`--reselect` 强制重新圈选。
+- macOS 需要在「系统设置 → 隐私与安全性 → 屏幕录制」给当前终端授权，否则抓到的帧是纯黑。
+- 收齐并通过整文件 SHA256 校验后才写文件；Ctrl-C 随时中止。
+- 标定模式（可选）：`./run.sh stream --calibrate` 配合 `./run.sh receive --calibrate`，实测各档参数（blocklen/ecc/box-size）的单帧解出率，自动选出最优档并保存，后续 stream/receive 直接继承。
+
 ### 传输方式与 chunk-size 选择
 
 二维码数量 = ceil(压缩后大小 / chunk-size)，只跟压缩后体积和分片大小有关。选多大的 `--chunk-size`，取决于你怎么把二维码传到对端：
