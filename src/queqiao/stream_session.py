@@ -5,8 +5,8 @@
 16 位 nonce 在不同文件间的碰撞、以及操作者中途换了个文件重发。
 """
 
-from fountain import FountainDecoder
-from stream_packet import PacketError, unpack_packet
+from queqiao.fountain import FountainDecoder
+from queqiao.stream_packet import PacketError, unpack_packet
 
 LOCK_MIN_PACKETS = 3
 

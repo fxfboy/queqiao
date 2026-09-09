@@ -46,7 +46,7 @@ def profile_path():
 
 
 def synthetic_payload():
-    from fountain import splitmix64_next
+    from queqiao.fountain import splitmix64_next
     out = bytearray()
     state = SYNTHETIC_SEED
     while len(out) < SYNTHETIC_SIZE:
@@ -159,7 +159,7 @@ class CalibrationCollector:
 
     def feed(self, raw):
         """返回是否计入统计。非本协议 / 坏包一律 False，不抛。"""
-        from stream_packet import PacketError, unpack_packet
+        from queqiao.stream_packet import PacketError, unpack_packet
         try:
             pkt = unpack_packet(raw)
         except PacketError:

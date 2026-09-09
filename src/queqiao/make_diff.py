@@ -237,7 +237,7 @@ def compare_directories(dir1, dir2, ignore_binary=True, use_gitignore=True, incl
     return result, stats
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Compare two directories and write a unified diff (optional QueQiao helper for encoder.py)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -260,7 +260,7 @@ def main():
                               help='不使用 .gitignore 规则')
     filter_group.add_argument('--ignore', nargs='+', metavar='pattern',
                               help='额外的忽略模式 (如: --ignore "*.log" "test_*")')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     include_extensions = None
     if args.ext:

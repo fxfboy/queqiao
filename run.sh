@@ -2,10 +2,11 @@
 #
 # QueQiao (鹊桥) - 快速启动脚本（基于 uv）
 # 兼容 Linux, macOS, Windows (Git Bash)
-# 用法: ./run.sh encode <输入文件> [选项]
-#       ./run.sh decode photo1.jpg [photo2.jpg ...]
+# 用法: ./run.sh <子命令> [参数...]
+#   各子命令的完整选项用 `./run.sh <子命令> --help` 查看。
 #
-# 依赖由 pyproject.toml 声明，uv 在首次 `uv sync` 时自动创建 .venv 并同步依赖。
+# 依赖由 pyproject.toml 声明，uv 在首次 `uv sync` 时自动创建 .venv 并同步依赖；
+# 本地运行的是仓库源码（uv 以 editable 方式安装 src/queqiao）。
 
 set -e
 
@@ -60,13 +61,13 @@ install_zbar() {
     esac
 }
 
-# 首次运行前的准备：装好原生 zbar，并用 uv 同步依赖
+# 首次运行前的准备：装好原生 zbar，并用 uv 同步依赖（含 pyzbar extra）
 setup() {
     ensure_uv
     if [ ! -d "$VENV_DIR" ]; then
         install_zbar
         echo "Syncing dependencies with uv..."
-        uv sync
+        uv sync --extra pyzbar
     fi
 }
 
@@ -88,103 +89,22 @@ setup_env() {
     esac
 }
 
-# 用项目环境运行某个脚本（uv 会自动确保依赖已同步）
-run_py() {
-    uv run python "$@"
-}
-
 # 主流程
 main() {
     setup
     setup_env
 
     case "$1" in
-        encode|e)
-            shift
-            if [ $# -lt 1 ]; then
-                echo "用法: ./run.sh encode <输入文件> [选项]"
-                echo ""
-                echo "选项:"
-                echo "  -o FILE              输出 HTML 文件 (默认: output/qr-{chunk_size}-{时间戳}.html)"
-                echo "  --cols N             每行二维码数量 (默认: 6)"
-                echo "  --qr-size N          二维码尺寸 (默认: 180)"
-                echo "  --chunk-size N       每片字节数 (默认: 800)"
-                echo "  --backend qr|jab     码制后端 (默认: qr)"
-                echo "  --jab-colors 4|8     JAB Code 颜色数 (默认: 8)"
-                echo "  --no-open            生成后不自动打开浏览器 (默认: 自动打开)"
-                echo ""
-                echo "示例:"
-                echo "  ./run.sh encode input.txt -o qr.html"
-                echo "  ./run.sh encode input.txt -o qr.html --chunk-size 1000 --qr-size 340"
-                echo "  # 传输仓库 diff（先生成再编码）:"
-                echo "  ./run.sh diff /ext/repo /int/repo -o changes.patch"
-                echo "  ./run.sh encode changes.patch -o qr.html"
-                exit 1
-            fi
-            run_py "$SCRIPT_DIR/encoder.py" "$@"
-            ;;
-
-        diff)
-            shift
-            if [ $# -lt 2 ]; then
-                echo "用法: ./run.sh diff <基准目录> <目标目录> [选项]"
-                echo ""
-                echo "选项:"
-                echo "  -o FILE              输出 diff 文件 (默认: diff.patch)"
-                echo "  --ext .py .js ...    只包含指定扩展名的文件"
-                echo "  --no-gitignore       不使用 .gitignore 规则"
-                echo "  --ignore pattern ... 额外的忽略模式"
-                echo ""
-                echo "示例:"
-                echo "  ./run.sh diff /ext/repo /int/repo -o changes.patch"
-                exit 1
-            fi
-            run_py "$SCRIPT_DIR/make_diff.py" "$@"
-            ;;
-
-        decode|d)
-            shift
-            if [ $# -lt 1 ]; then
-                echo "用法: ./run.sh decode <照片/目录...> [选项]"
-                echo ""
-                echo "选项:"
-                echo "  -o FILE              输出文件 (默认: restored.out)"
-                echo "  --backend NAME       识别后端: zxing/pyzbar/jab (默认: zxing)"
-                echo "  --debug              显示调试信息"
-                exit 1
-            fi
-            run_py "$SCRIPT_DIR/decoder.py" "$@"
-            ;;
-
-        stream|s)
-            shift
-            if [ $# -lt 1 ]; then
-                echo "用法: ./run.sh stream <文件> [选项]"
-                echo ""
-                echo "选项:"
-                echo "  --blocklen N         每个源块的字节数 (默认: 800)"
-                echo "  --ecc L|M|Q|H        QR 纠错级别 (默认: M)"
-                echo "  --fps N              播放帧率 (默认: 6)"
-                echo "  --box-size N         每模块像素数 (默认: 6)"
-                echo ""
-                echo "打开一个循环播放喷泉码的窗口，直到你按 Esc 停止。"
-                echo "接收端用 ./run.sh receive 圈选这个窗口。"
-                exit 1
-            fi
-            run_py "$SCRIPT_DIR/player.py" "$@"
-            ;;
-
-        receive|r)
-            shift
-            run_py "$SCRIPT_DIR/stream_decoder.py" "$@"
+        encode|e|decode|d|diff|stream|s|receive|r)
+            uv run queqiao "$@"
             ;;
 
         test|t)
-            run_py "$SCRIPT_DIR/test_roundtrip.py"
+            uv run python tests/test_roundtrip.py
             ;;
 
         verify|v)
-            run_py "$SCRIPT_DIR/verify_full.py"
+            uv run python tests/verify_full.py
             ;;
 
         *)
@@ -195,22 +115,14 @@ main() {
             echo "用法:"
             echo "  ./run.sh encode <输入文件> [--chunk-size N]  # 把文件编码成二维码 HTML"
             echo "  ./run.sh decode <照片/目录...>         # 从照片还原文件"
-            echo "  ./run.sh stream <输入文件>             # v3: 循环播放喷泉码窗口"
-            echo "  ./run.sh receive [--screen] [-o FILE]  # v3: 圈选屏幕区域接收"
+            echo "  ./run.sh stream <输入文件>             # 循环播放喷泉码窗口"
+            echo "  ./run.sh receive [--screen] [-o FILE]  # 圈选屏幕区域接收"
             echo "  ./run.sh diff <基准目录> <目标目录>    # (可选) 生成目录 diff 文件"
-            echo "  ./run.sh test                          # 运行测试"
-            echo "  ./run.sh verify                        # 验证完整往返"
+            echo "  ./run.sh test                          # 运行字节往返测试"
+            echo "  ./run.sh verify                        # 验证完整往返 (真实二维码)"
             echo ""
-            echo "完整流程 (传输任意文件):"
-            echo "  1. 内网: ./run.sh encode input.txt -o qr.html"
-            echo "     截图传输可用: ./run.sh encode input.txt -o qr.html --chunk-size 1000 --qr-size 340"
-            echo "  2. 浏览器打开 qr.html，全屏显示"
-            echo "  3. 手机拍照，传到外网"
-            echo "  4. 外网: ./run.sh decode photo.jpg -o restored.out"
-            echo ""
-            echo "传输仓库 diff (可选):"
-            echo "  ./run.sh diff /ext/repo /int/repo -o changes.patch"
-            echo "  ./run.sh encode changes.patch -o qr.html"
+            echo "各子命令的完整选项: ./run.sh <子命令> --help"
+            echo "安装为独立命令 (不依赖本仓库): pipx install queqiao[pyzbar]"
             ;;
     esac
 }

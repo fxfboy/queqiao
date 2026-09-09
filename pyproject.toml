@@ -1,17 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "queqiao"
 version = "0.1.0"
 description = "QueQiao (鹊桥) - 用二维码跨 air gap 摆渡任意文件"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "qrcode[pil]",
     "Pillow",
-    "pyzbar",
     "zxing-cpp",
     "mss>=10.2.0",
 ]
 
+[project.optional-dependencies]
+# pyzbar 需要系统级 libzbar（brew install zbar / apt install libzbar0），
+# 不能当硬依赖——否则 pip install 后开箱即坏。默认后端是 zxing-cpp，
+# 纯 wheel 零系统依赖；只有在需要 pyzbar 后端时才装这个 extra。
+pyzbar = ["pyzbar"]
+
+[project.scripts]
+queqiao = "queqiao.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/queqiao"]
+
 [tool.uv]
-# 这是一组脚本（encoder.py / decoder.py / ...），不是可安装的包，
-# 关闭打包，让 uv 只负责管理 .venv 与依赖。
-package = false
+# 现在是可安装的包：uv sync 后以 editable 方式就位，uv run queqiao 直接可用。
+package = true

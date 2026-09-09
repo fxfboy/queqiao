@@ -16,16 +16,16 @@ import sys
 import time
 from pathlib import Path
 
-from frame_source import (
+from queqiao.frame_source import (
     BLACK_FRAME_ALERT, NO_CODE_ALERT, ScreenSource, is_black_frame, resolve_region,
 )
-from qr_backends import DEFAULT_BACKEND, available_backends, get_backend
-from stream_packet import PayloadError, parse_payload, safe_output_name
-from stream_profile import (
+from queqiao.qr_backends import DEFAULT_BACKEND, available_backends, get_backend
+from queqiao.stream_packet import PayloadError, parse_payload, safe_output_name
+from queqiao.stream_profile import (
     CALIBRATION_MATRIX, CONSERVATIVE_DEFAULTS, CalibrationCollector,
     MIN_ACCEPTABLE_RATE, save_profile,
 )
-from stream_session import StreamSession
+from queqiao.stream_session import StreamSession
 
 
 class ReceiveResult:
@@ -206,7 +206,7 @@ def run_calibration(source, backend, duration):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog='receive',
+        prog='queqiao receive',
         description='QueQiao (鹊桥) v3: 从屏幕区域接收流式喷泉码')
     parser.add_argument('-o', '--output', default=None,
                         help='输出文件路径（默认用发送端的文件名写到 --out-dir）')

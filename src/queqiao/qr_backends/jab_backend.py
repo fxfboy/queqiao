@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from jabcode_cli import find_executable, run_reader
+from queqiao.jabcode_cli import find_executable, run_reader
 from .base import QRDecoderAdapter, QRDecodeResult
 
 

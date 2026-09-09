@@ -52,9 +52,9 @@ ensure_tcl_env()
 
 import tkinter as tk          # noqa: E402 - 必须在 ensure_tcl_env() 之后
 
-from stream_encoder import DEFAULT_BLOCKLEN, GeneratorError, StreamEncoder  # noqa: E402
-from symbol_encoder import QRSymbolEncoder  # noqa: E402
-from stream_profile import CALIBRATION_MATRIX, load_profile, synthetic_payload  # noqa: E402
+from queqiao.stream_encoder import DEFAULT_BLOCKLEN, GeneratorError, StreamEncoder  # noqa: E402
+from queqiao.symbol_encoder import QRSymbolEncoder  # noqa: E402
+from queqiao.stream_profile import CALIBRATION_MATRIX, load_profile, synthetic_payload  # noqa: E402
 
 DEFAULT_FPS = 6
 
@@ -322,7 +322,7 @@ class PlayerWindow:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog='stream',
+        prog='queqiao stream',
         description='QueQiao (鹊桥) v3: 流式喷泉码播放，配合 receive 使用')
     parser.add_argument('input', nargs='?', help='要传输的文件（--calibrate 时可省略）')
     parser.add_argument('--blocklen', type=int, default=None,

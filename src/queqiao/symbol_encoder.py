@@ -11,7 +11,7 @@ stream_encoder.py / player.py / fountain.py 一行不改。它不会让 JAB 流�
 import base64
 from abc import ABC, abstractmethod
 
-from encoder import chunk_to_qr_image
+from queqiao.encoder import chunk_to_qr_image
 
 # QR Version 40 在 byte 模式下各 ECC 等级的字符容量（QR 标准固定值）
 QR_V40_BYTE_CAPACITY = {'L': 2953, 'M': 2331, 'Q': 1663, 'H': 1273}
@@ -57,7 +57,7 @@ class SymbolEncoder(ABC):
 
     def check_capacity(self, blocklen):
         """启动时校验，早失败早报错（§9）。"""
-        from stream_packet import HEADER_SIZE
+        from queqiao.stream_packet import HEADER_SIZE
         need = blocklen + HEADER_SIZE
         if need > self.max_payload_bytes:
             raise ValueError(

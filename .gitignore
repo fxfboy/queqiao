@@ -6,3 +6,5 @@ __pycache__/
 .qoder/
 docs/superpowers/
 output/
+dist/
+*.egg-info/

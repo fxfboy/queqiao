@@ -148,23 +148,28 @@ pil = [
 [[package]]
 name = "queqiao"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "mss" },
     { name = "pillow" },
-    { name = "pyzbar" },
     { name = "qrcode", extra = ["pil"] },
     { name = "zxing-cpp" },
+]
+
+[package.optional-dependencies]
+pyzbar = [
+    { name = "pyzbar" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mss", specifier = ">=10.2.0" },
     { name = "pillow" },
-    { name = "pyzbar" },
+    { name = "pyzbar", marker = "extra == 'pyzbar'" },
     { name = "qrcode", extras = ["pil"] },
     { name = "zxing-cpp" },
 ]
+provides-extras = ["pyzbar"]
 
 [[package]]
 name = "zxing-cpp"

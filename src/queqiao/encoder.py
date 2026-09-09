@@ -24,7 +24,7 @@ from io import BytesIO
 import qrcode
 from qrcode.util import QRData, MODE_8BIT_BYTE
 
-from jabcode_cli import find_executable, run_writer
+from queqiao.jabcode_cli import find_executable, run_writer
 
 
 # ──────────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ body {{
 # 4. 主程序
 # ──────────────────────────────────────────────────────────────
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='QueQiao (鹊桥): encode a file into a QR-code HTML page for air-gap transfer',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -333,7 +333,7 @@ def main():
     parser.add_argument('--no-open', action='store_true',
                         help='生成后不自动打开浏览器 (默认: 自动打开)')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.chunk_size is None:
         args.chunk_size = 3000 if args.backend == 'jab' else 800
@@ -344,7 +344,7 @@ def main():
 
     if args.output is None:
         timestamp = time.strftime('%Y%m%d-%H%M%S')
-        output_dir = Path(__file__).parent / 'output'
+        output_dir = Path.cwd() / 'output'
         output_dir.mkdir(exist_ok=True)
         args.output = str(output_dir / f'qr-{args.chunk_size}-{timestamp}.html')
 

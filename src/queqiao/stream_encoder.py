@@ -9,8 +9,8 @@ import math
 import queue
 import threading
 
-from fountain import FountainEncoder, FountainExhausted
-from stream_packet import MAX_TOTAL_PAYLOAD, build_payload, pack_packet, split_blocks
+from queqiao.fountain import FountainEncoder, FountainExhausted
+from queqiao.stream_packet import MAX_TOTAL_PAYLOAD, build_payload, pack_packet, split_blocks
 
 # 6 fps 下是 10 秒缓冲。它的作用是吸收生成耗时的抖动，不是攒水库——
 # 生成 33-105 ms/帧本来就快过播放 167 ms/帧，不需要大缓冲。

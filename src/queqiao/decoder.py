@@ -19,7 +19,7 @@ import argparse
 import base64
 from pathlib import Path
 
-from qr_backends import DEFAULT_BACKEND, available_backends, get_backend
+from queqiao.qr_backends import DEFAULT_BACKEND, available_backends, get_backend
 
 
 IMAGE_EXTENSIONS = {
@@ -244,7 +244,7 @@ def decode_and_merge_chunks(qr_data_list, payload_encoding='base85'):
 # 4. 主程序
 # ──────────────────────────────────────────────────────────────
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='QueQiao (鹊桥): decode QR codes from photos to restore the original file',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -276,7 +276,7 @@ def main():
                         help=f'二维码识别后端 (默认: {DEFAULT_BACKEND}); 详见 qr_backends/')
     parser.add_argument('--debug', action='store_true', help='显示调试信息')
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     
     print("=" * 60)
     print("  QueQiao (鹊桥) - Decoder")
