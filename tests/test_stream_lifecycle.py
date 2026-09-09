@@ -10,14 +10,13 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image
 
-from stream_encoder import (
+from queqiao.stream_encoder import (
     JOIN_TIMEOUT, QUEUE_MAXSIZE, Frame, GeneratorError, StreamEncoder,
 )
-from symbol_encoder import SymbolEncoder
+from queqiao.symbol_encoder import SymbolEncoder
 
 
 class FakeEncoder(SymbolEncoder):
@@ -156,8 +155,7 @@ def test_join_timeout_gives_up_and_reports():
 # 探测渲染（__init__ 里那次）必须放过去，否则卡的是构造函数，验的不是同一件事。
 _HANG_SCRIPT = r'''
 import sys, time
-sys.path.insert(0, %r)
-from stream_encoder import StreamEncoder
+from queqiao.stream_encoder import StreamEncoder
 
 
 class _Img:
@@ -197,8 +195,7 @@ def test_stuck_generator_does_not_block_process_exit():
     就再也退不出来，测试自己会挂死。
     """
     print("[TEST] ④ 生成线程卡死时进程仍能退出...")
-    repo = os.path.dirname(os.path.abspath(__file__))
-    p = subprocess.Popen([sys.executable, '-c', _HANG_SCRIPT % repo],
+    p = subprocess.Popen([sys.executable, '-c', _HANG_SCRIPT],
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          text=True, errors='replace')
     try:
@@ -264,7 +261,7 @@ def test_generation_actually_renders_once_at_startup():
 
 def test_interval_ms_for_fps():
     print("[TEST] 帧率 → 毫秒节拍...")
-    from player import interval_ms_for_fps
+    from queqiao.player import interval_ms_for_fps
     assert interval_ms_for_fps(6) == 167, "§7.3 的初始默认 6 fps 必须是 167 ms"
     assert interval_ms_for_fps(1) == 1000
     assert interval_ms_for_fps(60) == 17
@@ -280,7 +277,7 @@ def test_interval_ms_for_fps():
 
 def test_fit_box_size():
     print("[TEST] 整数倍缩放：不让任何一层做非整数缩放（§7.2）...")
-    from player import STREAM_BORDER, fit_box_size
+    from queqiao.player import STREAM_BORDER, fit_box_size
     # v40 是 177 模块；加 4 模块 quiet zone × 2 边 = 185
     assert fit_box_size(177, 1080) == 1080 // 185
     assert fit_box_size(177, 1080) * 185 <= 1080, "缩放后不得超出屏幕"
@@ -297,7 +294,7 @@ def test_fit_box_size():
 
 def test_format_status():
     print("[TEST] 状态行是纯函数...")
-    from player import format_status
+    from queqiao.player import format_status
     s = format_status(120, 20.0, K=40)
     assert '120' in s and '40' in s
     assert '6.0' in s, "应显示实际帧率 120/20.0 = 6.0"
@@ -309,7 +306,7 @@ def test_image_to_tk_data_is_base64_png():
     print("[TEST] 帧图转 Tk 可吃的 base64 PNG（不走 PIL.ImageTk）...")
     import base64
     from PIL import Image
-    from player import image_to_tk_data
+    from queqiao.player import image_to_tk_data
     data = image_to_tk_data(Image.new('RGB', (64, 64), 'white'))
     assert isinstance(data, bytes), "tk.PhotoImage(data=) 收 bytes 或 str"
     raw = base64.b64decode(data)
@@ -320,7 +317,7 @@ def test_image_to_tk_data_is_base64_png():
 def test_ensure_tcl_env_is_idempotent_and_safe():
     print("[TEST] TCL_LIBRARY 修补幂等且不误伤...")
     import os
-    from player import ensure_tcl_env
+    from queqiao.player import ensure_tcl_env
     saved = os.environ.get('TCL_LIBRARY')
     try:
         # 已设值时必须原样不动——用户/run.sh 显式指定的路径优先级最高

@@ -8,12 +8,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image
 
-import frame_source
-from frame_source import (
+import queqiao.frame_source
+from queqiao.frame_source import (
     MIN_REGION_PX, detect_scale_factor, is_black_frame, load_region,
     save_region, scale_bbox, validate_bbox,
 )
@@ -75,17 +74,17 @@ def test_is_black_frame():
 def test_region_persistence_roundtrip():
     print("[TEST] region 持久化往返...")
     with tempfile.TemporaryDirectory() as td:
-        orig = frame_source.region_path
-        frame_source.region_path = lambda: Path(td) / 'last_region.json'
+        orig = queqiao.frame_source.region_path
+        queqiao.frame_source.region_path = lambda: Path(td) / 'last_region.json'
         try:
             assert load_region() is None, "文件不存在时返回 None"
             save_region((11, 22, 333, 444))
             assert load_region() == (11, 22, 333, 444)
             raw = json.loads((Path(td) / 'last_region.json').read_text())
-            assert raw['schema'] == frame_source.REGION_SCHEMA, "必须写 schema 版本"
+            assert raw['schema'] == queqiao.frame_source.REGION_SCHEMA, "必须写 schema 版本"
             assert 'saved_at' in raw
         finally:
-            frame_source.region_path = orig
+            queqiao.frame_source.region_path = orig
     print("  ✅ PASSED")
 
 
@@ -93,8 +92,8 @@ def test_region_load_tolerates_garbage():
     print("[TEST] region 文件损坏 / 版本不符 → 返回 None，绝不崩...")
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / 'last_region.json'
-        orig = frame_source.region_path
-        frame_source.region_path = lambda: p
+        orig = queqiao.frame_source.region_path
+        queqiao.frame_source.region_path = lambda: p
         try:
             for content in ['{ not json',
                             '{}',
@@ -105,13 +104,13 @@ def test_region_load_tolerates_garbage():
                 p.write_text(content)
                 assert load_region() is None, "内容 %r 应被安全拒绝" % content
         finally:
-            frame_source.region_path = orig
+            queqiao.frame_source.region_path = orig
     print("  ✅ PASSED")
 
 
 def test_frame_source_yields_fresh_images():
     print("[TEST] §8.1 所有权：每次迭代 yield 新对象，调用方关掉不影响下一帧...")
-    from frame_source import FrameSource
+    from queqiao.frame_source import FrameSource
 
     class Fake(FrameSource):
         describe = 'fake'
@@ -131,7 +130,7 @@ def test_frame_source_yields_fresh_images():
 
 def test_no_code_alert_constant_exists():
     print("[TEST] NO_CODE_ALERT 常量存在（遮挡诊断用，Task 17 消费）...")
-    from frame_source import NO_CODE_ALERT
+    from queqiao.frame_source import NO_CODE_ALERT
     assert isinstance(NO_CODE_ALERT, int) and NO_CODE_ALERT > 0
     print("  ✅ PASSED")
 

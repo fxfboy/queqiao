@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""stream_session.py：接收端会话状态机。
+"""queqiao.stream_session.py：接收端会话状态机。
 
 K=1 / K=2 的死锁回归是本文件最重要的用例——这两档对应原文件约 5-17 KB
 （配置补丁、单个 patch），是主路径而不是边角。
@@ -8,11 +8,10 @@ import os
 import random
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fountain import FountainEncoder, LT_MIN_K
-from stream_packet import build_payload, pack_packet, split_blocks, unpack_packet
-from stream_session import LOCK_MIN_PACKETS, SessionStats, StreamSession
+from queqiao.fountain import FountainEncoder, LT_MIN_K
+from queqiao.stream_packet import build_payload, pack_packet, split_blocks, unpack_packet
+from queqiao.stream_session import LOCK_MIN_PACKETS, SessionStats, StreamSession
 
 
 def incompressible(n, seed=20260905):
@@ -23,7 +22,7 @@ def incompressible(n, seed=20260905):
     只有在 K>=3 时才分得开。
 
     这里用 random.Random 只是造测试数据，**不是协议 PRNG**——协议里的选块与
-    度分布抽样一律走 fountain.splitmix64，两者不能混。
+    度分布抽样一律走 queqiao.fountain.splitmix64，两者不能混。
     """
     rng = random.Random(seed)
     return bytes(rng.getrandbits(8) for _ in range(n))
@@ -118,7 +117,7 @@ def test_end_to_end_clean_session():
         s.feed(next(stream))
         fed += 1
     assert s.is_complete, "只解出 %d/%d 块" % (s.solved_count, K)
-    from stream_packet import parse_payload
+    from queqiao.stream_packet import parse_payload
     meta, restored = parse_payload(s.assemble(), s.K, s.blocklen)
     assert restored == data, "端到端必须逐字节还原"
     assert meta['filename'] == "blob.bin"

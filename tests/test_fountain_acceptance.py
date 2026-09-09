@@ -12,9 +12,8 @@ import os
 import random
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fountain import FountainDecoder, FountainEncoder
+from queqiao.fountain import FountainDecoder, FountainEncoder
 
 BLOCKLEN = 64
 

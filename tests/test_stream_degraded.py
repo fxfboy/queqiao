@@ -9,16 +9,15 @@ import io
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image, ImageFilter
 
-from fountain import FountainEncoder
-from qr_backends import get_backend
-from stream_decoder import decode_frame
-from stream_packet import build_payload, pack_packet, split_blocks
-from stream_profile import CALIBRATION_MATRIX, synthetic_payload
-from symbol_encoder import QRSymbolEncoder
+from queqiao.fountain import FountainEncoder
+from queqiao.qr_backends import get_backend
+from queqiao.stream_decoder import decode_frame
+from queqiao.stream_packet import build_payload, pack_packet, split_blocks
+from queqiao.stream_profile import CALIBRATION_MATRIX, synthetic_payload
+from queqiao.symbol_encoder import QRSymbolEncoder
 
 PACKETS_PER_STAGE = 12          # 够看出趋势，又不至于跑几分钟
 

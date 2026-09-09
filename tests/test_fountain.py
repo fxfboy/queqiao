@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fountain.py 的单元测试：纯字节、零 IO、零依赖。
+"""queqiao.fountain.py 的单元测试：纯字节、零 IO、零依赖。
 
 reference vectors 是跨 Python 版本、跨 Windows/macOS 一致性的唯一硬保障，
 比任何统计测试都硬。任何一条断言失败都意味着两端会解不出，不是"精度问题"。
@@ -8,9 +8,8 @@ import math
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fountain import (
+from queqiao.fountain import (
     MASK64, splitmix64_next, unbiased_below,
     LT_MIN_K, DegreeTable, sample_degree, sample_indices, lt_indices,
     SEED_MAX, FountainExhausted, FountainEncoder, round_permutation, xor_bytes,

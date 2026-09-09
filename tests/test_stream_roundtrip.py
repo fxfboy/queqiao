@@ -11,14 +11,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image
 
-from fountain import FountainEncoder
-from stream_decoder import ReceiveResult, decode_frame, receive_stream, write_output
-from stream_packet import build_payload, pack_packet, split_blocks
-from stream_session import StreamSession
+from queqiao.fountain import FountainEncoder
+from queqiao.stream_decoder import ReceiveResult, decode_frame, receive_stream, write_output
+from queqiao.stream_packet import build_payload, pack_packet, split_blocks
+from queqiao.stream_session import StreamSession
 
 BLOCKLEN = 200
 

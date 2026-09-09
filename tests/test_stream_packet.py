@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""stream_packet.py：16 字节头与载荷布局的单元测试。
+"""queqiao.stream_packet.py：16 字节头与载荷布局的单元测试。
 
 规格 §6.6 的校验清单每一条都必须有一个负例。任何一条漏了，
 接收端就会在那条上被畸形包穿透。
@@ -10,10 +10,9 @@ import os
 import struct
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import stream_packet
-from stream_packet import (
+import queqiao.stream_packet
+from queqiao.stream_packet import (
     MAGIC, HEADER_SIZE, MAX_BLOCKLEN, MAX_TOTAL_PAYLOAD,
     PacketError, StreamPacket, pack_packet, unpack_packet, peek_magic,
     PAYLOAD_VERSION, PayloadError, serialize_meta, derive_nonce,
@@ -159,8 +158,8 @@ def test_rejects_out_of_range_header_before_allocating():
 
     # 但不能因为「当前不可达」就不验证——未跑过的防御代码等于没有。
     # 临时放宽 MAX_BLOCKLEN，让 total_payload 成为第一道挡住它的检查。
-    saved_max_blocklen = stream_packet.MAX_BLOCKLEN
-    stream_packet.MAX_BLOCKLEN = 0xFFFF
+    saved_max_blocklen = queqiao.stream_packet.MAX_BLOCKLEN
+    queqiao.stream_packet.MAX_BLOCKLEN = 0xFFFF
     try:
         # 0xFFFF x 0xFFFF = 4,294,836,225 远超 2^28
         head = struct.pack('>2sHIHH', MAGIC, 0, 0, 0xFFFF, 0xFFFF)
@@ -172,7 +171,7 @@ def test_rejects_out_of_range_header_before_allocating():
         else:
             raise AssertionError("K x blocklen > MAX_TOTAL_PAYLOAD 必须被拒绝")
     finally:
-        stream_packet.MAX_BLOCKLEN = saved_max_blocklen
+        queqiao.stream_packet.MAX_BLOCKLEN = saved_max_blocklen
 
     # K = 0 / blocklen = 0
     for K, blocklen in ((0, 8), (8, 0)):
@@ -402,7 +401,7 @@ def test_safe_output_name():
 
 def test_v1_decoder_notices_v3_packets():
     print("[TEST] v1/v2 解码器认出 v3 的 QF 包并计数...")
-    import decoder as v12_decoder
+    import queqiao.decoder as v12_decoder
 
     v12_decoder.reset_v3_counter()
     assert v12_decoder.V3_MAGIC_SEEN[0] == 0

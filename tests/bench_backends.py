@@ -6,7 +6,7 @@
   B. 真实拍照退化: 缩放 + 高斯模糊 + JPEG 有损压缩，按严酷度分四档
                     (mild / medium / harsh / brutal — 见 DEGRADE_PROFILES)
 
-测试文件: decoder.py 自身
+测试文件: queqiao.decoder.py 自身
 运行: DYLD_LIBRARY_PATH=/opt/homebrew/lib uv run python bench_backends.py
 """
 import os
@@ -16,12 +16,11 @@ import lzma
 import hashlib
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image, ImageFilter
-from encoder import encode_chunks, chunk_to_qr_image
-from decoder import decode_and_merge_chunks
-from qr_backends import PyzbarQRDecoder, ZxingQRDecoder
+from queqiao.encoder import encode_chunks, chunk_to_qr_image
+from queqiao.decoder import decode_and_merge_chunks
+from queqiao.qr_backends import PyzbarQRDecoder, ZxingQRDecoder
 
 
 BACKENDS = [
@@ -30,7 +29,7 @@ BACKENDS = [
 ]
 
 
-TEST_FILE = 'decoder.py'
+TEST_FILE = 'queqiao.decoder.py'
 CHUNK_SIZES = [800, 1500, 1800]
 BOX_SIZE = 10
 # 真实手机拍照退化：(缩放比, 高斯模糊半径, JPEG 质量) — 越靠后越接近"远拍+抖动+低质 JPEG"

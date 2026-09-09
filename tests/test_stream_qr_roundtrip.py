@@ -9,11 +9,10 @@ import io
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image
 
-from symbol_encoder import (
+from queqiao.symbol_encoder import (
     QR_V40_BYTE_CAPACITY, QRSymbolEncoder, SymbolEncoder, max_raw_for_base85,
 )
 
@@ -112,7 +111,7 @@ def test_ecc_levels_change_output():
 
 def test_encoder_chunk_to_qr_image_default_unchanged():
     print("[TEST] chunk_to_qr_image 加了 ecc 参数但默认行为不变...")
-    import encoder as v12_encoder
+    import queqiao.encoder as v12_encoder
     payload = b'compat check' * 30
     a = v12_encoder.chunk_to_qr_image(payload)
     b = v12_encoder.chunk_to_qr_image(payload, ecc='M')
@@ -159,7 +158,7 @@ def test_forcing_byte_mode_leaves_v1v2_images_identical():
     print("[TEST] 强制 byte 模式不改变 v1/v2 的正常载荷图像...")
     import os
     import qrcode as _qrcode
-    import encoder as v12_encoder
+    import queqiao.encoder as v12_encoder
     # base85 字符集含大小写字母和符号，随机载荷里出现 20 个连续数字的概率约 1e-18，
     # 所以正常载荷本来就走 byte 模式，显式指定后位流应当逐位相同。这条断言是
     # "修复不破坏 v1/v2 已生成 HTML"的依据；若哪天它红了，说明 v1/v2 的产物变了。
@@ -182,7 +181,7 @@ def test_forcing_byte_mode_leaves_v1v2_images_identical():
 def test_backend_accepts_path_and_pil_image():
     print("[TEST] backend 的 decode_image 同时接受路径和 PIL Image...")
     import tempfile
-    from qr_backends import get_backend
+    from queqiao.qr_backends import get_backend
 
     payload = b'polymorphic source test' * 20
     img = QRSymbolEncoder().encode(payload)
@@ -203,7 +202,7 @@ def test_backend_accepts_path_and_pil_image():
 
 def test_backend_does_not_close_borrowed_image():
     print("[TEST] 借用的 PIL Image 不能被 backend 关掉...")
-    from qr_backends import get_backend
+    from queqiao.qr_backends import get_backend
 
     img = QRSymbolEncoder().encode(b'do not close me' * 20)
     backend = get_backend('zxing')
@@ -221,7 +220,7 @@ def test_backend_closes_its_own_file_handles():
     import gc
     import tempfile
     import warnings
-    from qr_backends import get_backend
+    from queqiao.qr_backends import get_backend
 
     backend = get_backend('zxing')
     with tempfile.TemporaryDirectory(prefix='queqiao-close-') as d:
@@ -237,7 +236,7 @@ def test_backend_closes_its_own_file_handles():
 
 def test_backend_bad_source_still_raises():
     print("[TEST] 坏输入仍抛 ValueError（v1/v2 行为不变）...")
-    from qr_backends import get_backend
+    from queqiao.qr_backends import get_backend
     backend = get_backend('zxing')
     for bad in ('/nonexistent/path/nope.png', 12345, None):
         try:

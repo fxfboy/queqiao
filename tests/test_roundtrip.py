@@ -9,9 +9,8 @@ import hashlib
 import base64
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from encoder import encode_chunks, generate_html
+from queqiao.encoder import encode_chunks, generate_html
 
 # text + every byte value → proves the pipeline is byte-agnostic
 SAMPLE = b"Hello, QR transfer!\n" + bytes(range(256)) * 8

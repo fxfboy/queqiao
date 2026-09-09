@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Tests for make_diff.compare_directories."""
+"""Tests for queqiao.make_diff.compare_directories."""
 import os
 import sys
 import tempfile
 import shutil
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from make_diff import compare_directories
+from queqiao.make_diff import compare_directories
 
 
 def create_test_repos():

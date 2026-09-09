@@ -6,23 +6,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import stream_profile
-from stream_profile import (
+import queqiao.stream_profile
+from queqiao.stream_profile import (
     CALIBRATION_MATRIX, CONSERVATIVE_DEFAULTS, PROFILE_SCHEMA, SYNTHETIC_SIZE,
     load_profile, save_profile, synthetic_payload, validate_settings,
 )
 
 
 def _isolate(td):
-    stream_profile.profile_path = lambda: Path(td) / 'profile.json'
+    queqiao.stream_profile.profile_path = lambda: Path(td) / 'profile.json'
 
 
 def test_defaults_when_missing():
     print("[TEST] 没有 profile 时返回保守默认...")
     with tempfile.TemporaryDirectory() as td:
-        orig = stream_profile.profile_path
+        orig = queqiao.stream_profile.profile_path
         _isolate(td)
         try:
             settings, source = load_profile()
@@ -30,14 +29,14 @@ def test_defaults_when_missing():
             assert settings == CONSERVATIVE_DEFAULTS
             assert settings is not CONSERVATIVE_DEFAULTS, "必须返回副本，别让调用方改到全局常量"
         finally:
-            stream_profile.profile_path = orig
+            queqiao.stream_profile.profile_path = orig
     print("  ✅ PASSED")
 
 
 def test_save_load_roundtrip():
     print("[TEST] 写入后读回一致，且带 schema 与时间戳...")
     with tempfile.TemporaryDirectory() as td:
-        orig = stream_profile.profile_path
+        orig = queqiao.stream_profile.profile_path
         _isolate(td)
         try:
             p = save_profile({'blocklen': 1800, 'ecc': 'L', 'fps': 8, 'box_size': 5},
@@ -50,7 +49,7 @@ def test_save_load_roundtrip():
             assert source == 'profile'
             assert settings['blocklen'] == 1800 and settings['ecc'] == 'L'
         finally:
-            stream_profile.profile_path = orig
+            queqiao.stream_profile.profile_path = orig
     print("  ✅ PASSED")
 
 
@@ -69,7 +68,7 @@ def test_corrupt_profile_falls_back_without_crashing():
         '{"schema": 1, "settings": {"blocklen": 999999, "ecc": "M", "fps": 6, "box_size": 6}}',
     ]
     with tempfile.TemporaryDirectory() as td:
-        orig = stream_profile.profile_path
+        orig = queqiao.stream_profile.profile_path
         p = Path(td) / 'profile.json'
         _isolate(td)
         try:
@@ -79,7 +78,7 @@ def test_corrupt_profile_falls_back_without_crashing():
                 assert source == 'default', "内容 %r 应退化成默认" % content[:40]
                 assert settings == CONSERVATIVE_DEFAULTS
         finally:
-            stream_profile.profile_path = orig
+            queqiao.stream_profile.profile_path = orig
     print("  ✅ PASSED")
 
 
@@ -124,7 +123,7 @@ def test_synthetic_payload_is_deterministic_and_incompressible():
 
 def test_synthetic_payload_yields_k_at_least_64_on_every_stage():
     print("[TEST] §7.4 硬前提：每一档的 K 都 ≥ 64...")
-    from stream_packet import build_payload, split_blocks
+    from queqiao.stream_packet import build_payload, split_blocks
     payload, _mj, _n = build_payload('calibration.bin', synthetic_payload())
     for stage in CALIBRATION_MATRIX:
         K = len(split_blocks(payload, stage['blocklen']))
@@ -136,8 +135,8 @@ def test_synthetic_payload_yields_k_at_least_64_on_every_stage():
 
 def test_collector_groups_by_stage_and_measures_gaps():
     print("[TEST] collector 按 (K, blocklen) 分档，统计缺号...")
-    from stream_packet import pack_packet
-    from stream_profile import CalibrationCollector
+    from queqiao.stream_packet import pack_packet
+    from queqiao.stream_profile import CalibrationCollector
 
     col = CalibrationCollector()
     # 档 A: K=100 blocklen=800，seed 0..49 但缺 10,11,12（连丢 3）
@@ -163,7 +162,7 @@ def test_collector_groups_by_stage_and_measures_gaps():
 
 def test_collector_ignores_foreign_and_corrupt():
     print("[TEST] collector 对非本协议 / 坏包免疫...")
-    from stream_profile import CalibrationCollector
+    from queqiao.stream_profile import CalibrationCollector
     col = CalibrationCollector()
     assert col.feed(b'QR' + b'\x00' * 20) is False, "v1 的码不该进统计"
     assert col.feed(b'') is False
@@ -174,8 +173,8 @@ def test_collector_ignores_foreign_and_corrupt():
 
 def test_collector_best_picks_largest_passing_blocklen():
     print("[TEST] best() 取达标档里 blocklen 最大的那个...")
-    from stream_packet import pack_packet
-    from stream_profile import CALIBRATION_MATRIX, CalibrationCollector
+    from queqiao.stream_packet import pack_packet
+    from queqiao.stream_profile import CALIBRATION_MATRIX, CalibrationCollector
 
     col = CalibrationCollector()
     # 400 档全中，2300 档只有一半 —— 应选 400 而不是贪心选 2300

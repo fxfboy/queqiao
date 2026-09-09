@@ -8,9 +8,8 @@ import hashlib
 import base64
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from encoder import encode_chunks, chunk_to_qr_image
+from queqiao.encoder import encode_chunks, chunk_to_qr_image
 from pyzbar.pyzbar import decode as zbar_decode, ZBarSymbol
 from PIL import Image
 

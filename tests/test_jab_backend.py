@@ -8,10 +8,10 @@ from pathlib import Path
 
 from PIL import Image
 
-from decoder import decode_and_merge_chunks, decode_single_chunk
-from encoder import encode_chunks, generate_html
-from jabcode_cli import run_reader, run_writer
-from qr_backends.jab_backend import JabCodeDecoder
+from queqiao.decoder import decode_and_merge_chunks, decode_single_chunk
+from queqiao.encoder import encode_chunks, generate_html
+from queqiao.jabcode_cli import run_reader, run_writer
+from queqiao.qr_backends.jab_backend import JabCodeDecoder
 
 
 def make_executable(path, source):
