@@ -184,47 +184,142 @@ def ensure_tcl_env():
             return
 
 
+def enumerate_monitors():
+    """枚举所有显示器，返回 mss 全局坐标矩形列表（0 号"虚拟全桌面"已跳过）。
+
+    任何异常都降级为空列表——圈选是纯 UI，枚举失败不该把接收端撂倒，
+    由调用方回退到 Tk 自报的主屏尺寸。
+    """
+    try:
+        import mss
+        with mss.mss() as sct:
+            return [dict(m) for m in sct.monitors[1:]]
+    except Exception:
+        return []
+
+
+def tk_monitor_rects(mons, tk_w, tk_h):
+    """mss 显示器矩形 → tkinter 全局逻辑矩形。返回 (rects, factor)。
+
+    Tk 的 +x+y 和 mss 的 monitors 各用一套全局坐标，两套空间的比率就是
+    factor（screen 空间 → mss 空间）。分两种情形：
+
+    - Tk 看到的屏幕 == 所有显示器的 union → 两套空间一比一（factor=1）。
+      Linux X11 多屏 Tk 报整个虚拟桌面；macOS 上 mss 用 CGDisplayBounds
+      枚举、Tk 用逻辑点，实测两者恒等（探针：4K@2x 屏两边都是 1920×1080）。
+    - 否则按**主屏**比率统一换算（Windows：mss 报物理像素，Tk 报 DPI
+      虚拟化逻辑坐标，比率=缩放百分比）。混合 DPI 多屏（150%+100% 混插）
+      会有几像素偏差——遮罩差一两个像素不影响抓码，不做 per-monitor DPI。
+
+    注意比率必须拿主屏（mons[0]）算：union 在多屏下是两倍宽，拿来算比率
+    会得到 2.0，把所有矩形再对半砍一遍。
+    """
+    left = min(m['left'] for m in mons)
+    top = min(m['top'] for m in mons)
+    right = max(m['left'] + m['width'] for m in mons)
+    bottom = max(m['top'] + m['height'] for m in mons)
+    if (right - left, bottom - top) == (tk_w, tk_h):
+        factor = 1.0
+    else:
+        factor = detect_scale_factor(mons[0]['width'], tk_w)
+    rects = [(int(round(m['left'] / factor)), int(round(m['top'] / factor)),
+              int(round(m['width'] / factor)), int(round(m['height'] / factor)))
+             for m in mons]
+    return rects, factor
+
+
+def _geometry_str(w, h, x, y):
+    """Tk geometry 字符串。负坐标必须写成 +-N——单独的 -N 是
+    "距右/下边缘 N"，语义完全不同。"""
+    def coord(v):
+        return '+%d' % v if v >= 0 else '+-%d' % abs(v)
+    return '%dx%d%s%s' % (w, h, coord(x), coord(y))
+
+
 def select_region(prompt=None):
-    """全屏半透明覆盖层上拖框选区。返回**物理像素** bbox，取消返回 None。"""
+    """多屏圈选：**每块显示器**各铺一层半透明遮罩，在任意屏上拖框。
+
+    返回 bbox 是 **mss 全局坐标**（直接喂给 mss.grab），取消返回 None。
+    """
     ensure_tcl_env()
     import tkinter as tk
 
     root = tk.Tk()
-    # 不用 attributes('-fullscreen')：macOS 上原生全屏会开一个独立 Space，
-    # 遮罩自己独占一屏，要圈选的播放窗反而看不见。改成铺满屏幕尺寸的
-    # 普通置顶窗口，效果一样但不进 Space。
+    root.withdraw()             # root 只当 Toplevel 的载体，自己不露面
     tk_w = root.winfo_screenwidth()
     tk_h = root.winfo_screenheight()
-    root.geometry("%dx%d+0+0" % (tk_w, tk_h))
-    try:
-        root.attributes('-alpha', 0.28)
-    except tk.TclError:
-        pass
-    root.configure(bg='black')
-    root.attributes('-topmost', True)
-    root.config(cursor='crosshair')
 
-    canvas = tk.Canvas(root, bg='black', highlightthickness=0)
-    canvas.pack(fill='both', expand=True)
-    canvas.create_text(
-        tk_w // 2, 40, fill='white', font=('TkDefaultFont', 20),
-        text=prompt or "拖动框选发送端播放窗的区域　·　Esc 取消")
+    mons = enumerate_monitors()
+    if not mons or mons[0]['width'] <= 0:
+        mons = [{'left': 0, 'top': 0, 'width': tk_w, 'height': tk_h}]
+    rects, factor = tk_monitor_rects(mons, tk_w, tk_h)
+    if abs(factor - round(factor)) > 1e-6:
+        print("  ⚠️  屏幕缩放因子 %.3f 不是整数倍，抓取区域可能有 1–2 像素偏差。" % factor)
+    if factor != 1.0:
+        print("  检测到 %gx 显示缩放，bbox 换算为 mss 坐标。" % factor)
 
-    state = {'x0': 0, 'y0': 0, 'rect': None, 'result': None}
+    # 不用 attributes('-fullscreen')：macOS 上原生全屏会开一个独立 Space，
+    # 遮罩自己独占一屏，要圈选的播放窗反而看不见。改成每块屏一个铺满该屏
+    # 的普通置顶窗，效果一样、不进 Space，且任何一块屏都能圈。
+    windows = []
+    state = {'result': None}    # {'mon': mss矩形, 'local': 本屏逻辑矩形}
 
-    def on_press(e):
-        state['x0'], state['y0'] = e.x, e.y
-        if state['rect'] is not None:
-            canvas.delete(state['rect'])
-        state['rect'] = canvas.create_rectangle(
-            e.x, e.y, e.x, e.y, outline='#00ff88', width=3)
+    for idx, ((lx, ly, lw, lh), mon) in enumerate(zip(rects, mons), 1):
+        win = tk.Toplevel(root)
+        win.geometry(_geometry_str(lw, lh, lx, ly))
+        try:
+            win.attributes('-alpha', 0.28)
+        except tk.TclError:
+            pass
+        win.configure(bg='black')
+        win.attributes('-topmost', True)
+        win.config(cursor='crosshair')
 
-    def on_drag(e):
-        if state['rect'] is not None:
-            canvas.coords(state['rect'], state['x0'], state['y0'], e.x, e.y)
+        canvas = tk.Canvas(win, bg='black', highlightthickness=0,
+                           cursor='crosshair')
+        canvas.pack(fill='both', expand=True)
+        canvas.create_text(
+            lw // 2, 40, fill='white', font=('TkDefaultFont', 20),
+            text=prompt or "拖动框选发送端播放窗的区域　·　Esc 取消")
+        if len(rects) > 1:
+            canvas.create_text(20, 90, anchor='w', fill='#999999',
+                               font=('TkDefaultFont', 13),
+                               text="屏幕 %d/%d" % (idx, len(rects)))
+
+        drag = {'mon': mon, 'logical': (lx, ly, lw, lh),
+                'x0': 0, 'y0': 0, 'rect': None, 'canvas': canvas}
+
+        def on_press(e, drag=drag):
+            drag['x0'], drag['y0'] = e.x, e.y
+            if drag['rect'] is not None:
+                drag['canvas'].delete(drag['rect'])
+            drag['rect'] = drag['canvas'].create_rectangle(
+                e.x, e.y, e.x, e.y, outline='#00ff88', width=3)
+
+        def on_drag(e, drag=drag):
+            if drag['rect'] is not None:
+                drag['canvas'].coords(drag['rect'],
+                                      drag['x0'], drag['y0'], e.x, e.y)
+
+        def on_release(e, drag=drag):
+            # 只记原始矩形，校验和换算留在 mainloop 之后——校验失败时
+            # 窗口必须已经撤干净（和单屏版同一时序）。
+            left, top = min(drag['x0'], e.x), min(drag['y0'], e.y)
+            state['result'] = {
+                'mon': drag['mon'],
+                'logical': drag['logical'],
+                'local': (left, top, abs(e.x - drag['x0']), abs(e.y - drag['y0'])),
+            }
+            finish()
+
+        canvas.bind('<ButtonPress-1>', on_press)
+        canvas.bind('<B1-Motion>', on_drag)
+        canvas.bind('<ButtonRelease-1>', on_release)
+        win.bind('<Escape>', lambda _e: finish())
+        windows.append(win)
 
     def finish():
-        """先把遮罩从屏幕上撤下来，再销毁窗口对象。
+        """先逐窗 withdraw，再销毁。
 
         **为什么必须 withdraw 在前**：macOS Tk（8.6.14 实测）上 destroy() 的
         原生 NSWindow teardown 依赖事件循环冲刷。mainloop 一返回，调用方
@@ -233,23 +328,21 @@ def select_region(prompt=None):
         的遮罩就永远钉在屏幕上：拦住全部点击、进程被标成"未响应"（彩虹球），
         只能强退（2026-09-08 用户连续复现，取证见 CGWindowList：主线程已在
         帧循环、遮罩窗口仍在屏）。withdraw 是同步的 orderOut，不依赖后续
-        事件循环，先撤屏再销毁，幽灵在构造上不可能出现。
+        事件循环，先撤屏再销毁，幽灵在构造上不可能出现。多屏版每一层都要
+        撤——漏一层就是多一块幽灵。
         """
-        try:
-            root.wm_withdraw()
-        except tk.TclError:
-            pass
+        for w in windows:
+            try:
+                w.wm_withdraw()
+            except tk.TclError:
+                pass
+        for w in windows:
+            try:
+                w.destroy()
+            except tk.TclError:
+                pass
         root.destroy()
 
-    def on_release(e):
-        left, top = min(state['x0'], e.x), min(state['y0'], e.y)
-        state['result'] = (left, top, abs(e.x - state['x0']), abs(e.y - state['y0']))
-        finish()
-
-    canvas.bind('<ButtonPress-1>', on_press)
-    canvas.bind('<B1-Motion>', on_drag)
-    canvas.bind('<ButtonRelease-1>', on_release)
-    root.bind('<Escape>', lambda _e: finish())
     root.mainloop()
 
     # 兜底：mainloop 退出后把 destroy 可能遗留的原生 teardown 冲完。
@@ -262,18 +355,14 @@ def select_region(prompt=None):
     if state['result'] is None:
         return None
 
-    logical = validate_bbox(state['result'], (tk_w, tk_h))
+    picked = state['result']
+    logical = validate_bbox(picked['local'], picked['logical'][2:4])
 
-    # 逻辑坐标 → 物理像素
-    import mss
-    with mss.mss() as sct:
-        mon = sct.monitors[1]
-        factor = detect_scale_factor(mon['width'], tk_w)
-    if abs(factor - round(factor)) > 1e-6:
-        print("  ⚠️  屏幕缩放因子 %.3f 不是整数倍，抓取区域可能有 1–2 像素偏差。" % factor)
-    if factor != 1.0:
-        print("  检测到 %gx 显示缩放，bbox 换算为物理像素。" % factor)
-    return scale_bbox(logical, factor)
+    # 本屏逻辑矩形 → mss 全局坐标：屏幕原点 + 区域偏移×缩放。按所在屏的
+    # 原点做偏移，副屏（left/top 为负或超出主屏）也能落对位置。
+    pl, pt, pw, ph = scale_bbox(logical, factor)
+    mon = picked['mon']
+    return (mon['left'] + pl, mon['top'] + pt, pw, ph)
 
 
 def resolve_region(reselect=False):
