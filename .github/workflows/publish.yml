@@ -1,0 +1,99 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # 校验 tag 版本与包版本一致——打 tag 前必须先更新版本号，
+  # 否则 PyPI 上同一版本号重复发布会直接被拒，这条检查把失败提前到 tag 阶段。
+  # 版本号在 pyproject.toml 和 src/queqiao/__init__.py 各有一份，两处必须同步改。
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 校验 tag 与 pyproject.toml / __init__.py 版本一致
+        id: version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PYPROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          INIT_VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/queqiao/__init__.py | head -1)
+          echo "tag=${GITHUB_REF_NAME} pyproject=${PYPROJECT_VERSION} __init__=${INIT_VERSION}"
+
+          if [ -z "$PYPROJECT_VERSION" ]; then
+            echo "::error::无法从 pyproject.toml 读取版本号"
+            exit 1
+          fi
+          if [ -z "$INIT_VERSION" ]; then
+            echo "::error::无法从 src/queqiao/__init__.py 读取版本号"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "::error::tag 版本(${TAG_VERSION})与 pyproject.toml 版本(${PYPROJECT_VERSION})不一致，请先更新版本号再打 tag"
+            exit 1
+          fi
+          if [ "$PYPROJECT_VERSION" != "$INIT_VERSION" ]; then
+            echo "::error::pyproject.toml 版本(${PYPROJECT_VERSION})与 src/queqiao/__init__.py 版本(${INIT_VERSION})不一致，两处要同步更新"
+            exit 1
+          fi
+          echo "version=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: 冒烟测试（wheel 可安装、入口可用、版本与 tag 一致）
+        env:
+          EXPECTED_VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          uv venv /tmp/smoke
+          uv pip install --python /tmp/smoke/bin/python dist/*.whl
+          /tmp/smoke/bin/python -c "
+          import os, queqiao
+          assert queqiao.__version__ == os.environ['EXPECTED_VERSION'], queqiao.__version__
+          print('smoke ok:', queqiao.__version__)
+          "
+          /tmp/smoke/bin/queqiao encode --help > /dev/null
+          /tmp/smoke/bin/queqiao receive --help > /dev/null
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

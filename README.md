@@ -268,6 +268,24 @@ _REGISTRY = {
 
 性能/准确率对比可以丢给 `tests/bench_backends.py`：在 `BACKENDS` 列表里加上 `(FooQRDecoder, 'foo')`，跑一次就能对比 pixel-perfect 速度和退化场景下的鲁棒性。
 
+## 发布到 PyPI
+
+版本号在 `pyproject.toml` 和 `src/queqiao/__init__.py` 各一份，**两处必须同步更新**，
+然后 commit 并打 tag；`.github/workflows/publish.yml` 由 tag 触发：
+
+```bash
+# 1. 同步更新两处版本号（pyproject.toml 的 version 和
+#    src/queqiao/__init__.py 的 __version__，如 0.2.0 -> 0.3.0）
+# 2. 提交后打 tag 推送，CI 自动校验版本一致性 → 构建 → 冒烟测试 → 发布
+git commit -am "chore(release): v0.3.0"
+git tag v0.3.0
+git push origin main v0.3.0
+```
+
+前置配置（只需一次）：仓库 Settings → Secrets and variables → Actions，
+新建 `PYPI_API_TOKEN`（在 pypi.org → Account settings → API tokens 生成，
+建议 scoped 到 queqiao 项目）。
+
 ## License
 
 MIT
