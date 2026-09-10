@@ -14,7 +14,6 @@ StreamSession/FountainDecoder/parse_payload 校验链路。
 import os
 import sys
 import tempfile
-from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -129,7 +128,7 @@ def main():
     (block,) = split_blocks(payload, blocklen)
     packet = pack_packet(nonce, 0, K, blocklen, block)
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory():
         # 把 stream_decoder 里的全屏扫描与区域持久化换成测试替身
         real_probe = stream_decoder.probe_full_monitors
         real_save = stream_decoder.save_region

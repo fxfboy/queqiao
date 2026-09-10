@@ -64,4 +64,6 @@ disable = [
     "too-many-return-statements", "too-many-branches", "too-many-arguments",
     "too-many-positional-arguments", "too-many-locals", "too-many-statements",
     "duplicate-code", "use-dict-literal",
+    "dangerous-default-value",  # W0102: 闭包 capture dict 是刻意为之
+    "unsubscriptable-object",   # E1136: state['result'] 类型推断误报
 ]
