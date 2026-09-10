@@ -286,6 +286,15 @@ git push origin main v0.3.0
 新建 `PYPI_API_TOKEN`（在 pypi.org → Account settings → API tokens 生成，
 建议 scoped 到 queqiao 项目）。
 
+日常发版推荐用 `release.sh`（自动同步三处版本号 pyproject.toml /
+`src/queqiao/__init__.py` / uv.lock，校验版本递增与 tag 冲突，
+commit → 推分支 → tag → 推 tag，push 失败自动走本机代理 127.0.0.1:7897 重试）：
+
+```bash
+./release.sh 0.3.0 --dry-run   # 预览改动，不动文件和 git
+./release.sh 0.3.0             # 真实发版
+```
+
 ## License
 
 MIT

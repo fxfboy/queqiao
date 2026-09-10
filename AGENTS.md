@@ -21,6 +21,7 @@ Everything routes through `run.sh` (Linux/macOS/Git Bash) or `run.bat` (Windows 
 ./run.sh diff <base-dir> <target-dir> -o d.patch  # OPTIONAL: dir diff → patch file
 ./run.sh test                                  # → test_roundtrip.py (byte roundtrip)
 ./run.sh verify                                # → verify_full.py (real QR via pyzbar)
+./release.sh <X.Y.Z> [--dry-run]               # bump versions, commit, tag & push → CI publishes to PyPI
 ```
 
 Direct invocation (via `uv run`, which auto-syncs deps; or `python` after `source .venv/bin/activate`):
