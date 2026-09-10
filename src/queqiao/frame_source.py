@@ -18,10 +18,18 @@ MIN_REGION_PX = 40
 # 连续这么多帧全黑就提示权限问题。接收端跑 10–15 fps，30 帧约 2–3 秒。
 BLACK_FRAME_ALERT = 30
 
-# 连续这么多帧非黑但解不出任何码，提示"窗口被遮挡/区域选错/发送端没开"。
+# 连续这么多帧非黑但解不出任何码，先自动做一次全显示器扫描重定位；
+# 扫描也无果才提示"窗口被遮挡/区域选错/发送端没开"。
 # is_black_frame 抓不到这种情况——被遮挡时画面五颜六色，不黑，但一个码都读不出。
 # 与 BLACK_FRAME_ALERT 同量级，由 stream_decoder.py 的帧循环消费（Task 17）。
 NO_CODE_ALERT = 30
+
+# 两次自动重定位扫描之间的最小间隔（秒）。扫描要逐屏抓全屏解码（约 0.5–1s），
+# 且喷泉码丢得起——节流纯粹是为了别让诊断信息刷屏。
+RELOCATE_COOLDOWN = 10.0
+
+# 重定位时给码的包围盒外扩的边距（物理像素）。QR 需要静区，太小会贴边。
+RELOCATE_MARGIN = 40
 
 
 def region_path():
@@ -133,17 +141,31 @@ class ScreenSource(FrameSource):
         self.interval = interval
         self.frames_grabbed = 0
         self.actual_size = None
+        self._refresh_describe()
+
+    def _refresh_describe(self):
         self.describe = "屏幕区域 %d×%d @ (%d,%d)" % (
             self.bbox[2], self.bbox[3], self.bbox[0], self.bbox[1])
+
+    def retarget(self, bbox):
+        """运行中把抓取区域切到新的 mss 全局 bbox（自动重定位用）。
+
+        actual_size 复位但不重置 frames_grabbed——首帧尺寸打印只该发生
+        一次，重定位后的实际尺寸由调用方自行打印。
+        """
+        self.bbox = tuple(int(v) for v in bbox)
+        self.actual_size = None
+        self._refresh_describe()
 
     def __iter__(self):
         import mss
         from PIL import Image
 
-        region = {'left': self.bbox[0], 'top': self.bbox[1],
-                  'width': self.bbox[2], 'height': self.bbox[3]}
         with mss.mss() as sct:
             while True:
+                # 每帧重建 region：retarget() 在迭代中改 bbox 必须立刻生效。
+                region = {'left': self.bbox[0], 'top': self.bbox[1],
+                          'width': self.bbox[2], 'height': self.bbox[3]}
                 shot = sct.grab(region)
                 image = Image.frombytes('RGB', shot.size, shot.bgra, 'raw', 'BGRX')
                 if self.frames_grabbed == 0:
@@ -196,6 +218,58 @@ def enumerate_monitors():
             return [dict(m) for m in sct.monitors[1:]]
     except Exception:
         return []
+
+
+def probe_full_monitors(backend, margin=RELOCATE_MARGIN):
+    """逐屏全屏扫描喷泉码，返回首个命中的 (bbox, hits) 或 None。
+
+    给运行中的接收端做自动重定位用：圈选区域漂移/窗口被挪动后，
+    从全屏画面里重新找回码的位置。
+
+    - backend 借用本函数内部临时创建的 Image（不关它，与本仓 §8.1
+      的所有权约定一致），is_black_frame 的灰度转换自己会 copy。
+    - 返回的 bbox 是 mss 全局坐标，已按 margin 外扩并截回屏幕边界，
+      可直接 retarget() / save_region()。
+    - hits 只用于诊断展示；同一帧同一屏上的多个码不会都贴边距——
+      取所有命中的并集再外扩，避免只框住其中一个。
+    """
+    mons = enumerate_monitors()
+    if not mons:
+        return None
+    try:
+        import mss
+        from PIL import Image
+
+        with mss.mss() as sct:
+            for mon in mons:
+                try:
+                    shot = sct.grab(mon)
+                except Exception:
+                    continue
+                image = Image.frombytes('RGB', shot.size, shot.bgra, 'raw', 'BGRX')
+                try:
+                    if is_black_frame(image):
+                        continue
+                    results = backend.decode_image(image)
+                    if not results:
+                        continue
+                    xs1 = [r.x for r in results]
+                    ys1 = [r.y for r in results]
+                    xs2 = [r.x + r.w for r in results]
+                    ys2 = [r.y + r.h for r in results]
+                    x0, y0 = min(xs1), min(ys1)
+                    x1, y1 = max(xs2), max(ys2)
+                finally:
+                    image.close()
+                bx0 = max(mon['left'], mon['left'] + x0 - margin)
+                by0 = max(mon['top'], mon['top'] + y0 - margin)
+                bx1 = min(mon['left'] + mon['width'], mon['left'] + x1 + margin)
+                by1 = min(mon['top'] + mon['height'], mon['top'] + y1 + margin)
+                bbox = (bx0, by0, bx1 - bx0, by1 - by0)
+                return bbox, len(results)
+    except Exception:
+        return None
+    return None
 
 
 def tk_monitor_rects(mons, tk_w, tk_h):
@@ -363,6 +437,21 @@ def select_region(prompt=None):
     pl, pt, pw, ph = scale_bbox(logical, factor)
     mon = picked['mon']
     return (mon['left'] + pl, mon['top'] + pt, pw, ph)
+
+
+def autolocate_region(backend, margin=RELOCATE_MARGIN):
+    """启动时全显示器扫描喷泉码，命中则持久化并返回 bbox；没找到返回 None。
+
+    既然运行中都能自动重定位，启动就更不该让用户先圈一遍——码在哪，
+    扫一遍就知道。手动圈选降级为兜底（调用方在返回 None 时自己决定
+    是提示圈选还是退出）。
+    """
+    hit = probe_full_monitors(backend, margin=margin)
+    if hit is None:
+        return None
+    bbox, _hits = hit
+    save_region(bbox)
+    return bbox
 
 
 def resolve_region(reselect=False):

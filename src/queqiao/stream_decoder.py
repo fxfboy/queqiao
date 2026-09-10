@@ -17,7 +17,9 @@ import time
 from pathlib import Path
 
 from queqiao.frame_source import (
-    BLACK_FRAME_ALERT, NO_CODE_ALERT, ScreenSource, is_black_frame, resolve_region,
+    BLACK_FRAME_ALERT, NO_CODE_ALERT, RELOCATE_COOLDOWN, ScreenSource,
+    autolocate_region, is_black_frame, probe_full_monitors, resolve_region,
+    save_region,
 )
 from queqiao.qr_backends import DEFAULT_BACKEND, available_backends, get_backend
 from queqiao.stream_packet import PayloadError, parse_payload, safe_output_name
@@ -76,6 +78,7 @@ def receive_stream(source, session, backend, on_event=None):
     black_warned = False
     consecutive_no_code = 0
     no_code_warned = False
+    last_relocate_at = 0.0
     last_solved = 0
     last_progress_at = time.monotonic()
     frames = 0
@@ -99,13 +102,29 @@ def receive_stream(source, session, backend, on_event=None):
             # 非黑但连续 N 帧一个码都读不出 —— 和"没有屏幕录制权限"表现不同，
             # 成因多半是播放窗被遮挡、区域选错、或发送端没开（见 Task 16 的诊断表）。
             # is_black_frame 抓不到这种情况：遮挡窗口五颜六色、完全不黑。
+            # 达到阈值后先自动重定位（全显示器扫描找回码），扫不到才告警——
+            # 播放窗被挪过/RDP 窗口重排后，固定圈选区域必然对不上，自愈优先。
             if not frame_raws and not is_black_frame(image):
                 consecutive_no_code += 1
-                if consecutive_no_code >= NO_CODE_ALERT and not no_code_warned:
-                    no_code_warned = True
-                    print("\n  ⚠️  连续 %d 帧非黑但解不出任何码。"
-                          "检查播放窗是否在最前、圈选区域是否选对、发送端是否在跑。"
-                          % consecutive_no_code)
+                if consecutive_no_code >= NO_CODE_ALERT \
+                        and time.monotonic() - last_relocate_at >= RELOCATE_COOLDOWN:
+                    last_relocate_at = time.monotonic()
+                    hit = probe_full_monitors(backend)
+                    if hit is not None:
+                        bbox, hits = hit
+                        source.retarget(bbox)
+                        save_region(bbox)
+                        consecutive_no_code = 0
+                        no_code_warned = False
+                        print("\n  🎯 自动重定位：在显示器上重新找回喷泉码，"
+                              "新区域 %d×%d @ (%d,%d)（命中 %d 个码，已保存）"
+                              % (bbox[2], bbox[3], bbox[0], bbox[1], hits))
+                    elif not no_code_warned:
+                        no_code_warned = True
+                        print("\n  ⚠️  连续 %d 帧非黑但解不出任何码，"
+                              "自动扫描所有显示器也没找到喷泉码。"
+                              "检查播放窗是否在最前、发送端是否在跑。"
+                              % consecutive_no_code)
             else:
                 consecutive_no_code = 0
                 no_code_warned = False
@@ -222,7 +241,9 @@ def main(argv=None):
                         default=DEFAULT_BACKEND,
                         help='解码后端 (默认: %s)' % DEFAULT_BACKEND)
     parser.add_argument('--reselect', action='store_true',
-                        help='重新圈选区域（默认复用 ~/.queqiao/last_region.json）')
+                        help='（兼容别名）重新圈选区域；同 --select，自动找码会被跳过')
+    parser.add_argument('--select', action='store_true',
+                        help='跳过自动找码，启动即手动圈选区域')
     parser.add_argument('--interval', type=float, default=0.0,
                         help='两帧之间的额外等待秒数 (默认: 0，尽快抓)')
     parser.add_argument('--calibrate', action='store_true',
@@ -237,14 +258,33 @@ def main(argv=None):
         print("❌ %s" % e)
         return 1
 
-    try:
-        bbox = resolve_region(reselect=args.reselect)
-    except KeyboardInterrupt:
-        print("\n已取消。")
-        return 1
-    except ValueError as e:
-        print("❌ %s" % e)
-        return 1
+    if args.select or args.reselect:
+        try:
+            bbox = resolve_region(reselect=True)
+        except KeyboardInterrupt:
+            print("\n已取消。")
+            return 1
+        except ValueError as e:
+            print("❌ %s" % e)
+            return 1
+    else:
+        print("  正在扫描所有显示器寻找喷泉码...（找不到时才需手动圈选；"
+              "下次启动前想手动圈用 --select）")
+        sys.stdout.flush()
+        bbox = autolocate_region(backend)
+        if bbox is None:
+            print("  没扫到喷泉码，请手动圈选播放窗所在区域。")
+            try:
+                bbox = resolve_region(reselect=True)
+            except KeyboardInterrupt:
+                print("\n已取消。")
+                return 1
+            except ValueError as e:
+                print("❌ %s" % e)
+                return 1
+        else:
+            print("  自动定位区域: %d×%d @ (%d,%d)（已保存）"
+                  % (bbox[2], bbox[3], bbox[0], bbox[1]))
 
     source = ScreenSource(bbox, interval=args.interval)
 

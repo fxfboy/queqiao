@@ -32,7 +32,7 @@ uv run queqiao encode <file> -o qr.html [--cols N] [--qr-size N] [--chunk-size N
 uv run queqiao decode <images-or-dirs...> -o out [--backend zxing|pyzbar|jab] [--debug]
 uv run queqiao diff <base> <target> -o d.patch [--ext ...] [--no-gitignore] [--ignore ...]
 uv run queqiao stream <file> [--blocklen N] [--ecc L|M|Q|H] [--fps N]   # fountain playback window
-uv run queqiao receive [-o FILE] [--screen] [--reselect]                # screen-capture receiver
+uv run queqiao receive [-o FILE] [--select] [--reselect]               # screen-capture receiver (auto-locates the QR region first; --select/--reselect force manual selection)
 ```
 
 **`--backend` means different things on the two sides, and the value spaces do not overlap.** On `encode` it selects the *symbology* and is a hard-coded `('qr', 'jab')` choice — it does **not** consult the `qr_backends` registry. On `decode` it selects the *decode implementation* and comes from `available_backends()` (`zxing` / `pyzbar` / `jab`). So `--backend qr` is an encode-only value and `--backend zxing` is a decode-only value; only `jab` is valid on both sides.

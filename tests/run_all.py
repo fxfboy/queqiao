@@ -23,6 +23,7 @@ SUITES = [
     'test_stream_session.py',
     'test_stream_profile.py',
     'test_frame_source.py',
+    'test_relocate.py',                # 自动重定位（离线替身，无需真实屏幕）
     'test_make_diff.py',
     'test_roundtrip.py',
     'test_stream_lifecycle.py',
