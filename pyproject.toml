@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "queqiao"
-version = "0.1.0"
+version = "0.2.0"
 description = "QueQiao (鹊桥) - 用二维码跨 air gap 摆渡任意文件"
 readme = "README.md"
 license = "MIT"
