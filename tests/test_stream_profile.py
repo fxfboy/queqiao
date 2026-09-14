@@ -22,10 +22,11 @@ def test_defaults_when_missing():
         orig = queqiao.stream_profile.profile_path
         _isolate(td)
         try:
-            settings, source = load_profile()
+            settings, source, measurements = load_profile()
             assert source == 'default'
             assert settings == CONSERVATIVE_DEFAULTS
             assert settings is not CONSERVATIVE_DEFAULTS, "必须返回副本，别让调用方改到全局常量"
+            assert measurements == {}, "没有标定数据时 measurements 必须是空 dict"
         finally:
             queqiao.stream_profile.profile_path = orig
     print("  ✅ PASSED")
@@ -43,9 +44,19 @@ def test_save_load_roundtrip():
             assert raw['schema'] == PROFILE_SCHEMA
             assert 'calibrated_at' in raw
             assert raw['measurements']['decode_rate'] == 0.97
-            settings, source = load_profile()
+            settings, source, measurements = load_profile()
             assert source == 'profile'
             assert settings['blocklen'] == 1800 and settings['ecc'] == 'L'
+            assert measurements == {'decode_rate': 0.97, 'max_gap': 4}, \
+                "measurements 必须原样读回——录制建议时长要用 decode_rate 替换保守值"
+            # measurements 本身是附注数据：类型垃圾只影响 measurements，不拖垮 settings
+            p.write_text(json.dumps({
+                'schema': PROFILE_SCHEMA,
+                'settings': {'blocklen': 1800, 'ecc': 'L', 'fps': 8, 'box_size': 5},
+                'measurements': 'junk',
+            }))
+            settings, source, measurements = load_profile()
+            assert source == 'profile' and measurements == {}
         finally:
             queqiao.stream_profile.profile_path = orig
     print("  ✅ PASSED")
@@ -72,9 +83,10 @@ def test_corrupt_profile_falls_back_without_crashing():
         try:
             for content in bad:
                 p.write_text(content)
-                settings, source = load_profile()
+                settings, source, measurements = load_profile()
                 assert source == 'default', "内容 %r 应退化成默认" % content[:40]
                 assert settings == CONSERVATIVE_DEFAULTS
+                assert measurements == {}, "损坏的 profile 不能带出半份 measurements"
         finally:
             queqiao.stream_profile.profile_path = orig
     print("  ✅ PASSED")

@@ -11,6 +11,7 @@ GUI 层薄到只剩"把图贴上去"——帧率节拍、尺寸计算、状态�
 import argparse
 import base64
 import io
+import math
 import os
 import signal
 import sys
@@ -107,9 +108,79 @@ def fit_box_size(modules, screen_px, border=STREAM_BORDER):
     return box
 
 
-def format_status(packets_sent, elapsed, K):
-    fps = packets_sent / elapsed if elapsed > 0 else 0.0
-    return "已发 %d 包 │ K=%d │ %.1f fps │ Esc 停止" % (packets_sent, K, fps)
+def format_status(packets_sent, elapsed, K, fps=None, frame_yield=None):
+    """QR 下方的状态栏文本。纯函数：交替相位从 elapsed 推导，不碰实例状态。
+
+    手机取景时这条状态栏是画面里唯一肉眼可读的元素——"该录多久"只有发送端
+    知道（它握着 K 和 fps），所以必须打在画面上轮流显示。fps/frame_yield
+    不传（None）时保持旧行为，只显示进度。
+    """
+    fps_actual = packets_sent / elapsed if elapsed > 0 else 0.0
+    base = "已发 %d 包 │ K=%d │ %.1f fps │ Esc 停止" % (packets_sent, K, fps_actual)
+    if fps is None or fps <= 0:
+        return base
+    # 前 RECORD_HINT_LEAD_SECONDS 秒固定显示提示，别让人对着画面等一个
+    # 交替周期才看到数字；之后每 5 秒与常规进度互换。
+    phase = 0 if elapsed < RECORD_HINT_LEAD_SECONDS else int(elapsed // 5) % 2
+    if phase == 0:
+        return format_record_hint(K, fps,
+                                  FALLBACK_FRAME_YIELD if frame_yield is None
+                                  else frame_yield)
+    return base
+
+
+# 手机录像建议时长的两个固定系数，不做成命令行参数——这个功能的全部价值
+# 就是用户不用自己算。
+# α：peeling 解码器平均要 1.2~1.5×K 个包才收齐，余量留给拍摄侧的额外损失
+#   （帧切换瞬间的撕裂帧、滚动快门、摩尔纹都会吃掉有效解出率）。
+RECORD_SAFETY_FACTOR = 2.0
+# ρ：无标定数据时的保守单帧解出率。跑过 --calibrate 后用实测值替换，
+# 标定体系的存在意义就是这个数。
+FALLBACK_FRAME_YIELD = 0.7
+
+# 状态栏开头固定显示录制提示的秒数，之后才进入 5 秒交替。
+RECORD_HINT_LEAD_SECONDS = 10
+
+
+def suggested_record_seconds(K, fps, frame_yield=FALLBACK_FRAME_YIELD):
+    """手机录制建议时长（秒）：ceil(α × K / (fps × ρ))，再按展示规则取整。
+
+    取整规则：<60s 向上取到 10 的倍数、≥60s 向上取到 30 的倍数，下限 10s
+    ——整数口播好记，也没人需要对"47 秒"这种精度负责。
+    """
+    if K <= 0:
+        raise ValueError("K 必须为正，实得 %r" % (K,))
+    if fps <= 0:
+        raise ValueError("fps 必须为正，实得 %r" % (fps,))
+    if not 0 < frame_yield <= 1:
+        raise ValueError("frame_yield 必须在 (0, 1]，实得 %r" % (frame_yield,))
+    raw = math.ceil(RECORD_SAFETY_FACTOR * K / (fps * frame_yield))
+    multiple = 30 if raw >= 60 else 10
+    return max(multiple, (raw + multiple - 1) // multiple * multiple)
+
+
+def measured_frame_yield(measurements):
+    """从标定 measurements 里取单帧解出率；无效一律返回 None，绝不抛。
+
+    profile 是用户主目录里的文件，可能被手改、被写坏——decode_rate 缺失/
+    为 0/超界/类型垃圾都按"没有实测值"处理，调用方回退到 ρ=0.7。
+    bool 要显式排除：isinstance(True, int) 成立，而 True/1.0 不是测量值。
+    """
+    if not isinstance(measurements, dict):
+        return None
+    rate = measurements.get('decode_rate')
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        return None
+    if not 0 < rate <= 1:
+        return None
+    return float(rate)
+
+
+def format_record_hint(K, fps, frame_yield=FALLBACK_FRAME_YIELD):
+    """"建议录多久"的完整文案，横幅与状态栏共用同一份数字来源。"""
+    seconds = suggested_record_seconds(K, fps, frame_yield)
+    return ("📹 手机录像:  建议至少录 %d 秒（K=%d, fps=%.1f, 解出率 %.2f, α=%.1f）"
+            % (seconds, K, fps, frame_yield, RECORD_SAFETY_FACTOR))
 
 
 def enable_dpi_awareness():
@@ -145,8 +216,10 @@ def make_stage_encoder(stage, file_bytes):
 class PlayerWindow:
 
     def __init__(self, encoder, fps=DEFAULT_FPS, stages=None, stage_seconds=None,
-                 stage_bytes=None):
+                 stage_bytes=None, frame_yield=FALLBACK_FRAME_YIELD):
         self.encoder = encoder
+        self.fps = fps              # 供状态栏计算录制建议时长（区别于实测 fps）
+        self.frame_yield = frame_yield
         self.interval = interval_ms_for_fps(fps)
         self.started_at = None
         self._after_id = None
@@ -221,6 +294,8 @@ class PlayerWindow:
                 self.encoder.packets_sent,
                 time.monotonic() - self.started_at,
                 self.encoder.K,
+                fps=self.fps,
+                frame_yield=self.frame_yield,
             ))
         self._after_id = self.root.after(self.interval, self.tick)
 
@@ -368,7 +443,7 @@ def main(argv=None):
 
     # 只有非标定路径读 profile。标定就是要**生成** profile，
     # 继承上一次的结果会让基准随着每次标定漂移。
-    settings, source = load_profile()
+    settings, source, measurements = load_profile()
     if source == 'profile':
         print("  使用标定结果: blocklen=%d ecc=%s fps=%g box=%d"
               % (settings['blocklen'], settings['ecc'], settings['fps'],
@@ -381,6 +456,12 @@ def main(argv=None):
         args.fps = settings['fps']
     if args.box_size is None:
         args.box_size = settings['box_size']
+    # 单帧解出率优先用标定实测值；没有标定或数据损坏就回退 0.7 保守值。
+    frame_yield = measured_frame_yield(measurements)
+    if frame_yield is not None:
+        print("  录制建议采用实测单帧解出率: %.2f" % frame_yield)
+    else:
+        frame_yield = FALLBACK_FRAME_YIELD
 
     path = Path(args.input)
     if not path.is_file():
@@ -409,12 +490,19 @@ def main(argv=None):
     print("  源块:     K=%d × blocklen=%d" % (encoder.K, encoder.blocklen))
     print("  nonce:    0x%04x" % encoder.nonce)
     print("  帧率:     %.1f fps  ECC-%s  box=%d" % (args.fps, args.ecc, args.box_size))
+    print("  %s" % format_record_hint(encoder.K, args.fps, frame_yield))
+    print("  录多了不浪费：离线解码收齐即停；录少了可再录一段，与前者合并解码。")
+    # 为什么多录无害、少录可补，原话说清：decode_nonce 由文件内容派生，
+    # 同一文件重开发送端得到的包序列完全一致，两段视频才能拼着解。
+    print("  （视频是离线解码，解码器收齐即停，多录的尾巴不产生错误；录少了也不必"
+          "从头来——derive_nonce() 是内容派生的，同一文件重启发送端 "
+          "nonce/K/blocklen/seed 序列完全一致，两段视频的包可以合并解码。）")
     print()
     print("  发送端一直循环发包，不设预算。收齐后接收端会提示，届时按 Esc 停止。")
     print("  运维: RDP 窗口不能被遮挡或最小化；关掉屏保；画质与色深调到最高。")
     print("=" * 60)
 
-    PlayerWindow(encoder, fps=args.fps).run()
+    PlayerWindow(encoder, fps=args.fps, frame_yield=frame_yield).run()
     print("\n  已停止，共发出 %d 包。" % encoder.packets_sent)
     return 0
 

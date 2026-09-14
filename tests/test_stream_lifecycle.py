@@ -302,6 +302,82 @@ def test_format_status():
     print("  ✅ PASSED")
 
 
+def test_suggested_record_seconds():
+    print("[TEST] 手机录制建议时长：公式、取整、下限、边界...")
+    from queqiao.player import suggested_record_seconds
+    # 公式锚点：2.0×100/(6×0.7) = 47.6 → ceil 48 → <60 取整到 10 的倍数 = 50
+    assert suggested_record_seconds(100, 6) == 50
+    # 下限：K=1 时 ceil(2/4.2)=1 → 取整到 10
+    assert suggested_record_seconds(1, 6) == 10
+    # 上界：K=65535（>H 的极限）→ 31208 → 取整到 30 的倍数 = 31230
+    assert suggested_record_seconds(65535, 6) == 31230
+    # 长档取整：71.4 → 90（≥60s 取整到 30 的倍数）。60 这个边界附近有
+    # 二进制浮点误差（126/6/0.7 实算 60.00000000000001），锚点选离它远的值。
+    assert suggested_record_seconds(150, 6) == 90
+    # ρ=1.0 时算术精确：2×180/6 = 60 → 恰好落在长档规则上，不放大也不缩小
+    assert suggested_record_seconds(180, 6, 1.0) == 60
+    # fps 极小：0.001 fps 时 2×1/(0.001×0.7) = 2858 → 取整到 30 的倍数
+    assert suggested_record_seconds(1, 0.001) == 2880
+    # fps 极大：建议时长缩到下限 10s，而不是趋近 0
+    assert suggested_record_seconds(100, 1e6) == 10
+    # 单调性：K 变大时长不减；fps 变大时长不增
+    ks = [1, 5, 40, 41, 100, 1000, 65535]
+    secs = [suggested_record_seconds(k, 6) for k in ks]
+    assert secs == sorted(secs), "建议时长必须随 K 单调不减: %r" % secs
+    fpss = [0.5, 1, 2, 6, 30, 1000]
+    secs = [suggested_record_seconds(100, f) for f in fpss]
+    assert secs == sorted(secs, reverse=True), "建议时长必须随 fps 单调不增: %r" % secs
+    # 非法入参一律 ValueError——fps/K/frame_yield 的合法性是本函数自己的契约
+    for bad in ((0, 6), (-1, 6), (100, 0), (100, -6)):
+        try:
+            suggested_record_seconds(*bad)
+        except ValueError:
+            continue
+        raise AssertionError("K=%r fps=%r 应被拒绝" % bad)
+    # frame_yield 边界：0 / 1.5 / 负数拒绝，1.0 放行
+    for rho in (0, 1.5, -0.1):
+        try:
+            suggested_record_seconds(100, 6, rho)
+        except ValueError:
+            continue
+        raise AssertionError("frame_yield=%r 应被拒绝" % (rho,))
+    assert suggested_record_seconds(100, 6, 1.0) == 40, \
+        "ρ=1.0 时 2×100/6 = 33.4 → 40"
+    print("  ✅ PASSED")
+
+
+def test_measured_frame_yield():
+    print("[TEST] 标定实测解出率提取：垃圾输入一律回退 None，绝不抛...")
+    from queqiao.player import measured_frame_yield
+    assert measured_frame_yield({'decode_rate': 0.97}) == 0.97
+    assert measured_frame_yield({'decode_rate': 1}) == 1.0, "完美解出率合法"
+    for bad in ({}, None, 'junk', 42, {'decode_rate': None},
+                {'decode_rate': 0}, {'decode_rate': 1.5},
+                {'decode_rate': -0.2}, {'decode_rate': '0.9'},
+                {'decode_rate': True}, {'decode_rate': [0.9]}):
+        assert measured_frame_yield(bad) is None, "%r 应回退 None" % (bad,)
+    print("  ✅ PASSED")
+
+
+def test_format_record_hint_and_status_alternation():
+    print("[TEST] 录制提示文案与状态栏交替相位（纯函数，相位从 elapsed 推导）...")
+    from queqiao.player import format_record_hint, format_status
+    hint = format_record_hint(100, 6)
+    assert '50' in hint and 'K=100' in hint and '0.70' in hint and '2.0' in hint, hint
+    # 状态栏：前 10 秒固定显示提示，之后每 5 秒与进度互换
+    assert '建议至少录' in format_status(10, 0.0, K=100, fps=6), "t=0 就要可见"
+    assert '建议至少录' in format_status(10, 9.9, K=100, fps=6)
+    assert '已发' in format_status(10, 15.0, K=100, fps=6), "15s 落在进度相位"
+    assert '建议至少录' in format_status(10, 20.0, K=100, fps=6)
+    assert '已发' in format_status(10, 25.0, K=100, fps=6)
+    # 不传 fps 保持旧行为：标定等场景没有录制建议
+    assert '建议至少录' not in format_status(120, 20.0, K=40)
+    assert '建议至少录' not in format_status(120, 0.0, K=40, fps=None)
+    # 实测解出率透传：profile 有标定值时提示里显示实测值
+    assert '0.90' in format_status(10, 0.0, K=100, fps=6, frame_yield=0.9)
+    print("  ✅ PASSED")
+
+
 def test_image_to_tk_data_is_base64_png():
     print("[TEST] 帧图转 Tk 可吃的 base64 PNG（不走 PIL.ImageTk）...")
     import base64
@@ -344,6 +420,9 @@ if __name__ == '__main__':
     test_interval_ms_for_fps()
     test_fit_box_size()
     test_format_status()
+    test_suggested_record_seconds()
+    test_measured_frame_yield()
+    test_format_record_hint_and_status_alternation()
     test_image_to_tk_data_is_base64_png()
     test_ensure_tcl_env_is_idempotent_and_safe()
     print("\n✅ All lifecycle tests passed!")

@@ -78,30 +78,39 @@ def validate_settings(raw):
 
 
 def load_profile():
-    """返回 (settings, source)。source 是 'profile' 或 'default'。"""
+    """返回 (settings, source, measurements)。
+
+    source 是 'profile' 或 'default'。measurements 是标定时写入的实测数据
+    （如 decode_rate），没有或损坏时返回 {}——调用方据此回退保守系数，
+    与"绝不崩"的整体契约一致。
+    """
     p = profile_path()
     try:
         raw = json.loads(p.read_text(encoding='utf-8'))
     except FileNotFoundError:
-        return dict(CONSERVATIVE_DEFAULTS), 'default'
+        return dict(CONSERVATIVE_DEFAULTS), 'default', {}
     except Exception as e:
         print("  ⚠️  %s 读取失败（%s），改用保守默认。跑一次 --calibrate 可重建。"
               % (p, e.__class__.__name__))
-        return dict(CONSERVATIVE_DEFAULTS), 'default'
+        return dict(CONSERVATIVE_DEFAULTS), 'default', {}
 
     if not isinstance(raw, dict):
         print("  ⚠️  %s 格式不对，改用保守默认。" % p)
-        return dict(CONSERVATIVE_DEFAULTS), 'default'
+        return dict(CONSERVATIVE_DEFAULTS), 'default', {}
     if raw.get('schema') != PROFILE_SCHEMA:
         print("  ⚠️  %s 的 schema 是 %r，本版本要求 %d。改用保守默认，"
               "跑一次 --calibrate 可重建。" % (p, raw.get('schema'), PROFILE_SCHEMA))
-        return dict(CONSERVATIVE_DEFAULTS), 'default'
+        return dict(CONSERVATIVE_DEFAULTS), 'default', {}
 
     settings = validate_settings(raw.get('settings'))
     if settings is None:
         print("  ⚠️  %s 里的 settings 字段非法，改用保守默认。" % p)
-        return dict(CONSERVATIVE_DEFAULTS), 'default'
-    return settings, 'profile'
+        return dict(CONSERVATIVE_DEFAULTS), 'default', {}
+    measurements = raw.get('measurements')
+    # measurements 只是附注数据，坏了对调用方就是"没有实测值"，不必告警
+    if not isinstance(measurements, dict):
+        measurements = {}
+    return settings, 'profile', measurements
 
 
 def save_profile(settings, measurements=None):
