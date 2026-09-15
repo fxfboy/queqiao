@@ -7,18 +7,22 @@ parse_known_args 把未知参数留在 rest 里）。这样每个模块的 --hel
 报错习惯、默认值逻辑完全不动——模块文件里的 main() 依然可以单独测试。
 
 模块侧需要遵守的唯一约定：`main(argv=None)` 且 `parse_args(argv)`。
+
+子命令模块**延迟导入**：player/stream_decoder 顶层就 import tkinter/mss，
+而 CI 冒烟测试只装 wheel 跑 `queqiao` 入口——CI 的 Linux runner 没有系统
+tkinter，顶层 import 会让所有子命令（包括不需要 GUI 的 encode/decode）
+在入口处全军覆没。只有真正分发到子命令时才付这个导入成本。
 """
 
 import sys
 
-from queqiao import decoder, encoder, make_diff, player, stream_decoder
-
+# 命令名 → (模块路径, 一句话说明)。存模块名而不是函数，分发时才 import。
 COMMANDS = {
-    'encode': (encoder.main, '任意文件 → 二维码 HTML 网格'),
-    'decode': (decoder.main, '截图/照片 → 还原字节一致的原文件'),
-    'diff': (make_diff.main, '目录对比 → patch 文件（可选的辅助工具）'),
-    'stream': (player.main, '流式发送：喷泉码播放窗（配合 receive）'),
-    'receive': (stream_decoder.main, '流式接收：抓屏解码喷泉码'),
+    'encode': ('queqiao.encoder', '任意文件 → 二维码 HTML 网格'),
+    'decode': ('queqiao.decoder', '截图/照片 → 还原字节一致的原文件'),
+    'diff': ('queqiao.make_diff', '目录对比 → patch 文件（可选的辅助工具）'),
+    'stream': ('queqiao.player', '流式发送：喷泉码播放窗（配合 receive）'),
+    'receive': ('queqiao.stream_decoder', '流式接收：抓屏解码喷泉码'),
 }
 
 
@@ -37,10 +41,13 @@ def build_parser():
 
 
 def main(argv=None):
+    import importlib
+
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = build_parser()
     args, rest = parser.parse_known_args(argv)
-    func = COMMANDS[args.command][0]
+    module_name, _ = COMMANDS[args.command]
+    func = importlib.import_module(module_name).main
     # 交给子命令后 sys.argv 不再是它的视角，直接传 rest；
     # 各模块 main(argv) 里的 parse_args(argv) 会重新给出完整报错/--help。
     return func(rest) or 0
